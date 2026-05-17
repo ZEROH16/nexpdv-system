@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "NexPDV Manager",
+    "slug": "nexpdv-manager",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "nexpdv",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "backgroundColor": "#111827"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "br.com.nexpdv.manager"
+    },
+    "android": {
+      "package": "br.com.nexpdv.manager",
+      "adaptiveIcon": {
+        "backgroundColor": "#111827"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

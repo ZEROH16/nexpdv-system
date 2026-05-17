@@ -1,0 +1,264 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String
+  document  String
+  tradeName String?
+  phone     String?
+  email     String?
+  address   String?
+  logoUrl   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  products      Product[]
+  categories    Category[]
+  customers     Customer[]
+  sales         Sale[]
+  cashRegisters CashRegister[]
+  settings      Setting[]
+  licenses      License[]
+  plans         Subscription[]
+  deviceTokens  DeviceToken[]
+}
+
+model User {
+  id           String   @id @default(cuid())
+  companyId    String
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("cashier")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  sales   Sale[]
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  color     String   @default("#2563EB")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  products Product[]
+}
+
+model Product {
+  id         String   @id @default(cuid())
+  companyId  String
+  categoryId String?
+  name       String
+  barcode    String?
+  sku        String?
+  brand      String?
+  cost       Float    @default(0)
+  price      Float    @default(0)
+  margin     Float    @default(0)
+  stock      Float    @default(0)
+  minStock   Float    @default(0)
+  unit       String   @default("UN")
+  imageUrl   String?
+  active     Boolean  @default(true)
+  syncStatus String   @default("synced")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company  Company    @relation(fields: [companyId], references: [id])
+  category Category?  @relation(fields: [categoryId], references: [id])
+  items    SaleItem[]
+
+  @@index([companyId, name])
+  @@index([companyId, barcode])
+}
+
+model Customer {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String
+  document    String?
+  phone       String?
+  whatsapp    String?
+  address     String?
+  notes       String?
+  creditLimit Float    @default(0)
+  balance     Float    @default(0)
+  syncStatus  String   @default("synced")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  sales   Sale[]
+}
+
+model Sale {
+  id           String   @id @default(cuid())
+  companyId    String
+  number       String
+  operatorId   String
+  operatorName String
+  customerId   String?
+  customerName String?
+  subtotal     Float
+  discount     Float
+  total        Float
+  profit       Float
+  notes        String?
+  status       String   @default("completed")
+  syncStatus   String   @default("synced")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company  Company    @relation(fields: [companyId], references: [id])
+  operator User       @relation(fields: [operatorId], references: [id])
+  customer Customer?  @relation(fields: [customerId], references: [id])
+  items    SaleItem[]
+  payments Payment[]
+
+  @@index([companyId, createdAt])
+  @@index([companyId, number])
+}
+
+model SaleItem {
+  id          String @id @default(cuid())
+  saleId      String
+  productId   String
+  productName String
+  quantity    Float
+  unitPrice   Float
+  discount    Float  @default(0)
+  total       Float
+  cost        Float
+
+  sale    Sale    @relation(fields: [saleId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model Payment {
+  id     String @id @default(cuid())
+  saleId String
+  method String
+  amount Float
+  change Float  @default(0)
+
+  sale Sale @relation(fields: [saleId], references: [id])
+}
+
+model CashRegister {
+  id             String    @id @default(cuid())
+  companyId      String
+  operatorId     String
+  operatorName   String
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  openingAmount  Float
+  expectedAmount Float
+  countedAmount  Float?
+  difference     Float?
+  status         String    @default("open")
+
+  company   Company        @relation(fields: [companyId], references: [id])
+  movements CashMovement[]
+}
+
+model CashMovement {
+  id             String   @id @default(cuid())
+  cashRegisterId String
+  type           String
+  description    String
+  amount         Float
+  createdAt      DateTime @default(now())
+
+  cashRegister CashRegister @relation(fields: [cashRegisterId], references: [id])
+}
+
+model Setting {
+  id        String   @id @default(cuid())
+  companyId String
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, key])
+}
+
+model License {
+  id          String    @id @default(cuid())
+  companyId   String
+  key         String    @unique
+  status      String    @default("trial")
+  validUntil  DateTime
+  demoMode    Boolean   @default(true)
+  activatedAt DateTime?
+
+  company Company @relation(fields: [companyId], references: [id])
+}
+
+model Plan {
+  id        String   @id @default(cuid())
+  name      String
+  price     Float
+  maxStores Int
+  maxUsers  Int
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id        String   @id @default(cuid())
+  companyId String
+  planId    String
+  status    String
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  plan    Plan    @relation(fields: [planId], references: [id])
+}
+
+model SyncLog {
+  id        String   @id @default(cuid())
+  companyId String
+  deviceId  String
+  entity    String
+  entityId  String
+  operation String
+  status    String
+  message   String?
+  payload   String?
+  createdAt DateTime @default(now())
+}
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  companyId String
+  userId    String
+  token     String   @unique
+  platform  String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+}

@@ -1,0 +1,17 @@
+node_modules/
+.npm-cache/
+.tmp-main-check/
+.tmp-*/
+*.tsbuildinfo
+dist/
+build/
+out/
+coverage/
+.expo/
+.env
+.env.local
+*.db
+*.db-journal
+*.log
+.DS_Store
+Thumbs.db

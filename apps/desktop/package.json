@@ -1,0 +1,65 @@
+{
+  "name": "@nexpdv/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/main.cjs",
+  "scripts": {
+    "dev": "npm run build -w @nexpdv/shared && npm run dev:clean && npm run electron:validate && concurrently -k -n vite,main,electron \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:electron\"",
+    "dev:clean": "node scripts/clean-dev-cache.mjs",
+    "electron:validate": "node scripts/validate-electron-runtime.mjs",
+    "dev:renderer": "node scripts/vite-dev.mjs",
+    "dev:main": "node scripts/compile-main.mjs --watch",
+    "dev:electron": "wait-on tcp:5173 dist/main/main.cjs dist/main/preload.cjs dist/main/package.json && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main",
+    "build": "npm run build -w @nexpdv/shared && tsc -p tsconfig.json --noEmit && node scripts/vite-build.mjs && node scripts/compile-main.mjs",
+    "lint": "eslint src --ext .ts,.tsx",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dist": "npm run build && electron-builder"
+  },
+  "dependencies": {
+    "@nexpdv/shared": "0.1.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "electron": "^31.3.1",
+    "electron-builder": "^24.13.3",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7",
+    "sql.js": "^1.10.3",
+    "zustand": "^4.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.12",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "autoprefixer": "^10.4.19",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "postcss": "^8.4.39",
+    "tailwindcss": "^3.4.6",
+    "tsup": "^8.2.4",
+    "vite": "^5.3.5",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "br.com.nexpdv.desktop",
+    "productName": "NexPDV",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "build/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}
