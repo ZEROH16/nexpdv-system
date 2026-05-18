@@ -274,6 +274,7 @@ export const desktopApi = {
     createCharge: (input: { amount: number; saleId?: string }) => window.nexpdv.pix.createCharge<PixCharge>(input),
     getCharge: (input: string | { chargeId: string; refreshProvider?: boolean }) => window.nexpdv.pix.charge<PixCharge>(input),
     cancelCharge: (chargeId: string) => window.nexpdv.pix.cancelCharge<PixCharge>(chargeId),
+    renderQrCode: (payload: string) => window.nexpdv.pix.renderQr<{ dataUrl: string }>(payload),
     createChargeMock: (input: { amount: number; saleId?: string }) => window.nexpdv.pix.createChargeMock<PixCharge>(input),
     getChargeStatusMock: (chargeId: string) => window.nexpdv.pix.chargeStatusMock<PixChargeStatus>(chargeId),
     cancelChargeMock: (chargeId: string) => window.nexpdv.pix.cancelChargeMock<PixCharge>(chargeId),

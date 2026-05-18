@@ -88,6 +88,7 @@ contextBridge.exposeInMainWorld("nexpdv", {
     createCharge: (input: unknown) => invoke("pix:create-charge", input),
     charge: (input: unknown) => invoke("pix:charge", input),
     cancelCharge: (chargeId: string) => invoke("pix:cancel-charge", chargeId),
+    renderQr: (payload: string) => invoke("pix:render-qr", payload),
     createChargeMock: (input: unknown) => invoke("pix:create-charge-mock", input),
     chargeStatusMock: (chargeId: string) => invoke("pix:charge-status-mock", chargeId),
     cancelChargeMock: (chargeId: string) => invoke("pix:cancel-charge-mock", chargeId),

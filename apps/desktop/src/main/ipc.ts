@@ -3,6 +3,7 @@ import type { LocalDatabase } from "./localDatabase";
 import type { SyncEngine } from "./syncEngine";
 import { assertLicensedModule, checkLocalLicense } from "./licenseService";
 import { listThermalPrinters, openCashDrawer, printReceipt, printTestReceipt, type ReceiptPrintContext } from "./receiptPrinter";
+import { renderQrSvgDataUrl } from "./qrCodeRenderer";
 
 interface ReceiptPrintRequest {
   html: string;
@@ -82,6 +83,7 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("pix:create-charge", (_event, input) => db.createPixCharge(input.amount, input.saleId));
   ipcMain.handle("pix:charge", (_event, input) => (typeof input === "string" ? db.getPixCharge(input, true) : db.getPixCharge(input.chargeId, input.refreshProvider ?? true)));
   ipcMain.handle("pix:cancel-charge", (_event, chargeId: string) => db.cancelPixCharge(chargeId));
+  ipcMain.handle("pix:render-qr", (_event, payload: string) => ({ dataUrl: renderQrSvgDataUrl(payload) }));
   ipcMain.handle("pix:create-charge-mock", (_event, input) => db.createPixChargeMock(input.amount, input.saleId));
   ipcMain.handle("pix:charge-status-mock", (_event, chargeId: string) => db.getPixChargeStatusMock(chargeId));
   ipcMain.handle("pix:cancel-charge-mock", (_event, chargeId: string) => db.cancelPixChargeMock(chargeId));

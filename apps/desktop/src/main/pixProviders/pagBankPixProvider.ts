@@ -1,4 +1,5 @@
 import type { PixCharge, PixConfig } from "@nexpdv/shared";
+import { renderQrSvgDataUrl } from "../qrCodeRenderer";
 import type { PixProviderClient, PixProviderContext, PixCreateChargeInput, PixProviderResult, PixProviderStatusResult } from "./types";
 
 interface PagBankOrderResponse {
@@ -20,6 +21,11 @@ const baseUrlFor = (config: PixConfig): string =>
 
 const getToken = (config: PixConfig): string =>
   (config.apiKey || process.env.PAGBANK_SANDBOX_TOKEN || process.env.PAGSEGURO_SANDBOX_TOKEN || process.env.PAGBANK_TOKEN || process.env.PAGSEGURO_TOKEN || "").trim();
+
+const logDev = (message: string, details?: unknown): void => {
+  if (!process.env.VITE_DEV_SERVER_URL) return;
+  console.log(`[pix:pagbank] ${message}`, details ?? "");
+};
 
 const mapPagBankStatus = (order: PagBankOrderResponse, fallbackExpiresAt?: string): PixProviderStatusResult => {
   const paidCharge = order.charges?.find((charge) => charge.status === "PAID");
@@ -100,7 +106,7 @@ export class PagBankPixProvider implements PixProviderClient {
     const qrCodePayload = qrCode?.text ?? "";
     if (!body.id || !qrCodePayload) throw new Error("PagBank nao retornou QR Code Pix valido.");
 
-    const qrCodeImage = await this.fetchQrCodeImage(qrCode?.links ?? [], token);
+    const qrCodeImage = (await this.fetchQrCodeImage(qrCode?.links ?? [], token)) ?? this.renderPayloadFallback(qrCodePayload);
 
     return {
       provider: this.code,
@@ -158,23 +164,43 @@ export class PagBankPixProvider implements PixProviderClient {
   }
 
   private async fetchQrCodeImage(links: Array<{ rel?: string; href?: string; media?: string }>, token: string): Promise<string | undefined> {
-    const base64Link = links.find((link) => link.rel === "QRCODE.BASE64" || link.media === "text/plain");
-    const pngLink = links.find((link) => link.rel === "QRCODE.PNG" || link.media === "image/png");
+    logDev("links QR recebidos", links.map((link) => ({ rel: link.rel, media: link.media, hasHref: Boolean(link.href) })));
+    const normalizes = (value?: string) => (value ?? "").toLowerCase();
+    const base64Link = links.find((link) => normalizes(link.rel).includes("base64") || normalizes(link.media).includes("text/plain"));
+    const pngLink = links.find((link) => normalizes(link.rel).includes("png") || normalizes(link.media).includes("image/png"));
     const link = base64Link || pngLink;
-    if (!link?.href) return undefined;
+    if (!link?.href) {
+      logDev("API nao retornou href de QR. Usando fallback local.");
+      return undefined;
+    }
 
     try {
       const response = await fetch(link.href, { headers: { Authorization: `Bearer ${token}`, Accept: link.media || "*/*" } });
-      if (!response.ok) return undefined;
+      if (!response.ok) {
+        logDev("Falha ao baixar QR do PagBank", { status: response.status, media: link.media, rel: link.rel });
+        return undefined;
+      }
       if (base64Link) {
         const text = (await response.text()).trim();
+        logDev("QR base64 carregado pelo link PagBank.");
         return text.startsWith("data:") ? text : `data:image/png;base64,${text}`;
       }
       const arrayBuffer = await response.arrayBuffer();
+      logDev("QR PNG carregado pelo link PagBank.");
       return `data:image/png;base64,${Buffer.from(arrayBuffer).toString("base64")}`;
     } catch {
+      logDev("Erro ao carregar link do QR PagBank. Usando fallback local.");
+      return undefined;
+    }
+  }
+
+  private renderPayloadFallback(payload: string): string | undefined {
+    try {
+      logDev("Gerando QR local a partir do payload Pix.");
+      return renderQrSvgDataUrl(payload);
+    } catch (error) {
+      logDev("Falha ao gerar QR local.", error instanceof Error ? error.message : String(error));
       return undefined;
     }
   }
 }
-

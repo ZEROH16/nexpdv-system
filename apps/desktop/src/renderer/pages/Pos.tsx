@@ -51,6 +51,9 @@ export const Pos = () => {
   const [pixCharge, setPixCharge] = useState<PixCharge>();
   const [pixLoading, setPixLoading] = useState(false);
   const [pixCountdown, setPixCountdown] = useState<number>();
+  const [pixQrImage, setPixQrImage] = useState<string>();
+  const [pixQrLoading, setPixQrLoading] = useState(false);
+  const [pixQrError, setPixQrError] = useState<string>();
   const [managerDiscountOpen, setManagerDiscountOpen] = useState(false);
   const [managerCredential, setManagerCredential] = useState("");
   const [managerLogin, setManagerLogin] = useState("gerente");
@@ -154,6 +157,43 @@ export const Pos = () => {
     return () => window.clearInterval(timer);
   }, [paymentMethod, paymentOpen, pixCharge?.expiresAt]);
 
+  const regeneratePixQr = async () => {
+    const payload = pixCharge?.payloadPix ?? pixCharge?.qrCodePayload;
+    if (!payload) {
+      setPixQrImage(undefined);
+      setPixQrError("Nao foi possivel carregar QR.");
+      return;
+    }
+    setPixQrLoading(true);
+    setPixQrError(undefined);
+    try {
+      const result = await desktopApi.pix.renderQrCode(payload);
+      setPixQrImage(result.dataUrl);
+    } catch (error) {
+      if (import.meta.env.DEV) console.warn("[pix] Falha ao renderizar QR local", error);
+      setPixQrImage(undefined);
+      setPixQrError("Nao foi possivel carregar QR.");
+    } finally {
+      setPixQrLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!paymentOpen || paymentMethod !== "pix" || !pixCharge) {
+      setPixQrImage(undefined);
+      setPixQrError(undefined);
+      setPixQrLoading(false);
+      return;
+    }
+    if (pixCharge.qrCode) {
+      setPixQrImage(pixCharge.qrCode);
+      setPixQrError(undefined);
+      setPixQrLoading(false);
+      return;
+    }
+    void regeneratePixQr();
+  }, [paymentMethod, paymentOpen, pixCharge?.id, pixCharge?.qrCode, pixCharge?.payloadPix, pixCharge?.qrCodePayload]);
+
   useEffect(() => {
     setStoreCreditAuthorizationToken(undefined);
   }, [paymentMethod, selectedCustomer?.id, totals.total]);
@@ -181,6 +221,9 @@ export const Pos = () => {
     setPendingDiscountPercent(0);
     setDiscountError(undefined);
     setPixCharge(undefined);
+    setPixQrImage(undefined);
+    setPixQrError(undefined);
+    setPixQrLoading(false);
     pixAutoFinalizeRef.current = undefined;
     setHighDiscountAuthorizationToken(undefined);
     setStoreCreditAuthorizationToken(undefined);
@@ -1091,13 +1134,22 @@ export const Pos = () => {
                       </div>
                       <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
                         <div className="flex h-[220px] items-center justify-center rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800">
-                          {pixLoading ? (
+                          {pixLoading || pixQrLoading ? (
                             <Skeleton className="h-full w-full" />
-                          ) : pixCharge?.qrCode ? (
-                            <img className="h-full w-full object-contain" src={pixCharge.qrCode} alt="QR Code Pix" />
+                          ) : pixQrImage ? (
+                            <img
+                              className="h-full w-full object-contain"
+                              src={pixQrImage}
+                              alt="QR Code Pix"
+                              onError={() => {
+                                if (import.meta.env.DEV) console.warn("[pix] Imagem QR invalida, tentando fallback local.");
+                                setPixQrImage(undefined);
+                                void regeneratePixQr();
+                              }}
+                            />
                           ) : (
                             <div className="flex h-full w-full items-center justify-center rounded-lg bg-slate-100 text-center text-xs font-bold text-slate-500 dark:bg-slate-900">
-                              QR Code indisponivel
+                              {pixQrError ?? "Nao foi possivel carregar QR"}
                               <br />
                               use copia e cola
                             </div>
@@ -1116,6 +1168,9 @@ export const Pos = () => {
                       </div>
                       <div className="flex flex-wrap gap-3">
                         <Button variant="secondary" disabled={!pixCharge} onClick={() => void copyPixPayload()}>Copiar</Button>
+                        <Button variant="secondary" disabled={!pixCharge || pixQrLoading} onClick={() => void regeneratePixQr()}>
+                          {pixQrLoading ? "Gerando QR..." : "Regenerar QR"}
+                        </Button>
                         <Button variant="secondary" disabled={!pixCharge || pixCharge.status !== "waiting"} onClick={() => void cancelPixCharge()}>Cancelar cobranca</Button>
                         <Button disabled={!pixCharge || pixCharge.status === "paid"} onClick={() => void confirmPixManually()}>
                           Confirmar pagamento manualmente

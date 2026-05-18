@@ -82,6 +82,7 @@ declare global {
         createCharge: <T>(input: unknown) => Promise<T>;
         charge: <T>(input: unknown) => Promise<T>;
         cancelCharge: <T>(chargeId: string) => Promise<T>;
+        renderQr: <T>(payload: string) => Promise<T>;
         createChargeMock: <T>(input: unknown) => Promise<T>;
         chargeStatusMock: <T>(chargeId: string) => Promise<T>;
         cancelChargeMock: <T>(chargeId: string) => Promise<T>;
