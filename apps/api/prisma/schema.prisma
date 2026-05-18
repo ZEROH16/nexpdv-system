@@ -25,18 +25,25 @@ model Tenant {
 }
 
 model Company {
-  id        String   @id @default(cuid())
-  tenantId  String?
-  name      String
-  document  String
-  tradeName String?
-  phone     String?
-  email     String?
-  address   String?
-  logoUrl   String?
-  status    String   @default("active")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String   @id @default(cuid())
+  tenantId          String?
+  name              String
+  document          String
+  tradeName         String?
+  stateRegistration String?
+  phone             String?
+  whatsapp          String?
+  email             String?
+  address           String?
+  city              String?
+  state             String?
+  zipCode           String?
+  logoUrl           String?
+  internalNotes     String?
+  accountManager    String?
+  status            String   @default("active")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   tenant        Tenant?        @relation(fields: [tenantId], references: [id])
   users         User[]
@@ -57,18 +64,26 @@ model Company {
 }
 
 model User {
-  id               String   @id @default(cuid())
-  tenantId         String?
-  companyId        String
-  name             String
-  email            String   @unique
-  passwordHash     String
-  role             String   @default("cashier")
-  platformRole     String   @default("company_user")
-  active           Boolean  @default(true)
-  refreshTokenHash String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                  String    @id @default(cuid())
+  tenantId            String?
+  companyId           String
+  name                String
+  email               String    @unique
+  phone               String?
+  passwordHash        String
+  role                String    @default("cashier")
+  platformRole        String    @default("company_user")
+  permissionsJson     String    @default("{}")
+  active              Boolean   @default(true)
+  refreshTokenHash    String?
+  twoFactorEnabled    Boolean   @default(false)
+  twoFactorSecret     String?
+  recoveryCodesHash   String?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+  lastLoginAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   tenant    Tenant?    @relation(fields: [tenantId], references: [id])
   company   Company    @relation(fields: [companyId], references: [id])
@@ -243,6 +258,7 @@ model License {
   demoMode          Boolean   @default(true)
   featuresJson      String    @default("{}")
   maxDevices        Int       @default(1)
+  internalNotes     String?
   activatedAt       DateTime?
   lastValidatedAt   DateTime?
   lastSyncedAt      DateTime?
@@ -260,19 +276,22 @@ model License {
 }
 
 model Plan {
-  id           String   @id @default(cuid())
-  tenantId     String?
-  code         String   @unique
-  name         String
-  description  String?
-  price        Float
-  maxStores    Int
-  maxUsers     Int
-  maxDevices   Int      @default(1)
-  featuresJson String   @default("{}")
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                String   @id @default(cuid())
+  tenantId          String?
+  code              String   @unique
+  name              String
+  description       String?
+  price             Float
+  maxStores         Int
+  maxUsers          Int
+  maxDevices        Int      @default(1)
+  billingPeriod     String   @default("monthly")
+  graceDays         Int      @default(7)
+  featuresJson      String   @default("{}")
+  extraFeaturesJson String   @default("{}")
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   tenant        Tenant?        @relation(fields: [tenantId], references: [id])
   subscriptions Subscription[]
@@ -301,12 +320,16 @@ model Device {
   companyId     String
   licenseId     String?
   deviceId      String
+  shortCode     String?
   name          String
   fingerprint   String
+  hostName      String?
+  os            String?
   appVersion    String?
   platform      String    @default("desktop")
   status        String    @default("active")
   online        Boolean   @default(false)
+  lastIp        String?
   lastSeenAt    DateTime?
   activatedAt   DateTime  @default(now())
   deactivatedAt DateTime?

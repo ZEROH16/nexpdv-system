@@ -36,6 +36,8 @@ async function main() {
       maxStores: 1,
       maxUsers: 3,
       maxDevices: 1,
+      billingPeriod: "lifetime",
+      graceDays: 30,
       featuresJson: features({})
     },
     create: {
@@ -48,6 +50,8 @@ async function main() {
       maxStores: 1,
       maxUsers: 3,
       maxDevices: 1,
+      billingPeriod: "lifetime",
+      graceDays: 30,
       featuresJson: features({})
     }
   });
@@ -62,6 +66,8 @@ async function main() {
       maxStores: 2,
       maxUsers: 10,
       maxDevices: 3,
+      billingPeriod: "monthly",
+      graceDays: 7,
       featuresJson: features({ cloud: true, mobile: true })
     },
     create: {
@@ -74,6 +80,8 @@ async function main() {
       maxStores: 2,
       maxUsers: 10,
       maxDevices: 3,
+      billingPeriod: "monthly",
+      graceDays: 7,
       featuresJson: features({ cloud: true, mobile: true })
     }
   });
@@ -88,6 +96,8 @@ async function main() {
       maxStores: 5,
       maxUsers: 25,
       maxDevices: 8,
+      billingPeriod: "monthly",
+      graceDays: 10,
       featuresJson: features({ pix: true, fiscal: true, cloud: true, mobile: true, intelligence: true })
     },
     create: {
@@ -100,13 +110,15 @@ async function main() {
       maxStores: 5,
       maxUsers: 25,
       maxDevices: 8,
+      billingPeriod: "monthly",
+      graceDays: 10,
       featuresJson: features({ pix: true, fiscal: true, cloud: true, mobile: true, intelligence: true })
     }
   });
 
   const company = await prisma.company.upsert({
     where: { id: "cmp_nexpdv_demo" },
-    update: { tenantId: tenant.id, status: "active" },
+    update: { tenantId: tenant.id, status: "active", city: "Sao Paulo", state: "SP", zipCode: "01310-100", accountManager: "Comercial NexPDV" },
     create: {
       id: "cmp_nexpdv_demo",
       tenantId: tenant.id,
@@ -114,14 +126,20 @@ async function main() {
       tradeName: "NexPDV Store",
       document: "12.345.678/0001-90",
       phone: "(11) 4002-2026",
+      whatsapp: "(11) 94002-2026",
       email: "contato@nexpdv.com.br",
-      address: "Av. Paulista, 1000 - Sao Paulo/SP"
+      address: "Av. Paulista, 1000 - Sao Paulo/SP",
+      city: "Sao Paulo",
+      state: "SP",
+      zipCode: "01310-100",
+      accountManager: "Comercial NexPDV",
+      internalNotes: "Cliente demonstrativo do painel SaaS."
     }
   });
 
   await prisma.user.upsert({
     where: { email: "admin@nexpdv.com.br" },
-    update: { passwordHash, tenantId: tenant.id, platformRole: "super_admin" },
+    update: { passwordHash, tenantId: tenant.id, platformRole: "super_admin", permissionsJson: JSON.stringify({ "gerenciar usuarios SaaS": true, "gerenciar licencas": true, "gerenciar planos": true }) },
     create: {
       id: "usr_admin_demo",
       tenantId: tenant.id,
@@ -130,7 +148,8 @@ async function main() {
       email: "admin@nexpdv.com.br",
       passwordHash,
       role: "owner",
-      platformRole: "super_admin"
+      platformRole: "super_admin",
+      permissionsJson: JSON.stringify({ "gerenciar usuarios SaaS": true, "gerenciar licencas": true, "gerenciar planos": true })
     }
   });
 
