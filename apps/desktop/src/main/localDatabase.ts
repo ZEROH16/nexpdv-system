@@ -22,11 +22,14 @@ import {
   type PixChargeStatus,
   type PixConfig,
   type Product,
+  type ProductStockMovement,
+  type ProductStockMovementType,
   type Sale,
   type SaleItem,
   type SyncQueueItem
 } from "@nexpdv/shared";
 import { FiscalService } from "./fiscalService";
+import { assertLicensedModule, checkStoredLicense, createLocalLicenseActivation, normalizeStoredLicense, serializeFeatures, type LocalLicenseRecord } from "./licenseService";
 import { adminRoleCodes, hashPassword, hashPin, legacyHashPassword, managerRoleCodes, normalizeLogin, PERMISSIONS, permissionLabels, type PermissionKey } from "./permissionService";
 import { PixService } from "./pixService";
 import { roleSeeds } from "./roleService";
@@ -63,14 +66,26 @@ interface Db {
 export interface ProductQuery {
   search?: string;
   lowStock?: boolean;
+  active?: "active" | "inactive" | "all";
+  categoryId?: string;
+  expiringDays?: number;
   page?: number;
   pageSize?: number;
+}
+
+export interface ProductStockMovementInput {
+  productId: string;
+  type: ProductStockMovementType;
+  quantity: number;
+  reason?: string;
 }
 
 export interface CheckoutInput {
   customerId?: string;
   notes?: string;
   discount?: number;
+  highDiscountAuthorizationToken?: string;
+  storeCreditAuthorizationToken?: string;
   items: Array<{
     productId?: string;
     quantity: number;
@@ -119,6 +134,10 @@ export interface SystemState {
   locationControl: boolean;
   automaticBackupEnabled: boolean;
   backupPath: string;
+  blockNegativeStock: boolean;
+  receiptWidthMm: 58 | 80;
+  receiptFooterMessage: string;
+  receiptAutoPrint: boolean;
   company: Partial<Company>;
   license?: License & {
     cloudEnabled?: boolean;
@@ -143,6 +162,9 @@ export interface UserAccount {
   notes?: string;
   lastAccessAt?: string;
   permissions?: PermissionKey[];
+  inheritedPermissions?: PermissionKey[];
+  addedPermissions?: PermissionKey[];
+  removedPermissions?: PermissionKey[];
 }
 
 export interface RoleAccount {
@@ -150,6 +172,7 @@ export interface RoleAccount {
   name: string;
   code: string;
   level: number;
+  active: boolean;
   permissions: PermissionKey[];
 }
 
@@ -207,6 +230,13 @@ export interface AuthCredentialInput {
   requireManager?: boolean;
 }
 
+export interface AuthAuthorizationResult {
+  ok: boolean;
+  user?: UserAccount;
+  message: string;
+  token?: string;
+}
+
 export interface SaveUserInput {
   id?: string;
   name: string;
@@ -219,6 +249,16 @@ export interface SaveUserInput {
   password?: string;
   active?: boolean;
   notes?: string;
+  permissionOverrides?: Array<{ permission: PermissionKey; effect: "allow" | "deny" }>;
+}
+
+export interface SaveRoleInput {
+  id?: string;
+  name: string;
+  code?: string;
+  level?: number;
+  active?: boolean;
+  permissions: PermissionKey[];
 }
 
 export interface AuthLogEntry {
@@ -419,6 +459,7 @@ class SqlJsAdapter implements Db {
 export class LocalDatabase {
   private db!: Db;
   private SQL?: Awaited<ReturnType<typeof initSqlJs>>;
+  private authorizationTokens = new Map<string, { permission: PermissionKey; userId: string; expiresAt: number }>();
 
   constructor(private readonly dbPath = path.join(app.getPath("userData"), "nexpdv-local.db")) {}
 
@@ -432,6 +473,7 @@ export class LocalDatabase {
     this.createSchema();
     this.migrateSchema();
     this.seedInitialData();
+    this.ensureLicenseStorage();
     this.ensureSecuritySeed();
     this.ensureDefaultSettings();
     this.runAutomaticBackupIfNeeded();
@@ -451,6 +493,20 @@ export class LocalDatabase {
 
     if (query.lowStock) {
       where.push("p.stock <= p.min_stock");
+    }
+    if (query.active === "active") {
+      where.push("p.active = 1");
+    } else if (query.active === "inactive") {
+      where.push("p.active = 0");
+    }
+    if (query.categoryId) {
+      where.push("p.category_id = @categoryId");
+      params.categoryId = query.categoryId;
+    }
+    if (query.expiringDays !== undefined) {
+      const limitDate = new Date(Date.now() + Math.max(1, Number(query.expiringDays)) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      where.push("p.expiration_date IS NOT NULL AND p.expiration_date <> '' AND p.expiration_date <= @expirationLimit");
+      params.expirationLimit = limitDate;
     }
 
     const clause = where.join(" AND ");
@@ -477,21 +533,37 @@ export class LocalDatabase {
     this.assertCurrentPermission(input.id ? "edit_product" : "create_product");
     const id = input.id ?? uid("prd");
     const timestamp = now();
+    const name = input.name?.trim();
+    const barcode = input.barcode?.trim();
+    const price = Number(input.price ?? 0);
+    const cost = Number(input.cost ?? 0);
+    const stock = Number(input.stock ?? 0);
+    const minStock = Number(input.minStock ?? 0);
+    if (!name) throw new Error("Informe o nome do produto.");
+    if (!Number.isFinite(price) || price <= 0) throw new Error("Preco de venda invalido.");
+    if (!Number.isFinite(cost) || cost < 0) throw new Error("Preco de custo invalido.");
+    if (this.getSetting("block_negative_stock") === "true" && (stock < 0 || minStock < 0)) {
+      throw new Error("Estoque negativo bloqueado nas configuracoes.");
+    }
+    if (barcode) {
+      const duplicate = this.db.prepare("SELECT id FROM products WHERE company_id = ? AND barcode = ? AND id <> ? LIMIT 1").get(COMPANY_ID, barcode, id);
+      if (duplicate) throw new Error("Ja existe produto com este codigo de barras.");
+    }
     const margin = calculateMargin(Number(input.cost ?? 0), Number(input.price ?? 0));
     const existing = this.getProductById(id);
     const product: Product = {
       id,
       companyId: COMPANY_ID,
-      name: input.name?.trim() || "Produto sem nome",
-      barcode: input.barcode?.trim(),
+      name,
+      barcode,
       sku: input.sku?.trim(),
       categoryId: input.categoryId ?? ((input as any).categoryName ? this.ensureCategory(String((input as any).categoryName)) : undefined),
       brand: input.brand?.trim(),
-      cost: Number(input.cost ?? 0),
-      price: Number(input.price ?? 0),
+      cost,
+      price,
       margin,
-      stock: Number(input.stock ?? 0),
-      minStock: Number(input.minStock ?? 0),
+      stock,
+      minStock,
       unit: input.unit || "UN",
       expirationDate: input.expirationDate,
       locationEnabled: input.locationEnabled ?? false,
@@ -517,7 +589,7 @@ export class LocalDatabase {
         )
         .run(product);
       this.enqueue("product", id, "update", product);
-      this.recordAudit("produto alterado", this.getCurrentOperatorName(), product.name);
+      this.recordAudit(existing.active && !product.active ? "produto inativado" : "produto alterado", this.getCurrentOperatorName(), product.name);
     } else {
       this.db
         .prepare(
@@ -562,14 +634,85 @@ export class LocalDatabase {
     return { imported };
   }
 
+  adjustProductStock(input: ProductStockMovementInput): Product {
+    this.assertCurrentPermission("edit_product");
+    const product = this.getProductById(input.productId);
+    if (!product) throw new Error("Produto nao encontrado.");
+    const quantity = Number(input.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Informe uma quantidade valida.");
+    const previousStock = Number(product.stock ?? 0);
+    const deltaByType: Record<ProductStockMovementType, number> = {
+      entry: quantity,
+      exit: -quantity,
+      adjustment: quantity - previousStock,
+      loss: -quantity,
+      expiration: -quantity
+    };
+    const newStock = roundMoney(previousStock + deltaByType[input.type]);
+    if (this.getSetting("block_negative_stock") === "true" && newStock < 0) {
+      throw new Error("Estoque negativo bloqueado nas configuracoes.");
+    }
+    const timestamp = now();
+    const movement: ProductStockMovement = {
+      id: uid("stk"),
+      companyId: COMPANY_ID,
+      productId: product.id,
+      productName: product.name,
+      type: input.type,
+      quantity,
+      previousStock,
+      newStock,
+      reason: input.reason?.trim(),
+      operatorName: this.getCurrentOperatorName(),
+      createdAt: timestamp
+    };
+    this.db
+      .prepare(
+        `INSERT INTO product_stock_movements (id, company_id, product_id, product_name, type, quantity,
+          previous_stock, new_stock, reason, operator_name, created_at)
+        VALUES (@id, @companyId, @productId, @productName, @type, @quantity,
+          @previousStock, @newStock, @reason, @operatorName, @createdAt)`
+      )
+      .run(movement);
+    this.db.prepare("UPDATE products SET stock = @stock, updated_at = @updatedAt, sync_status = 'pending' WHERE id = @id").run({
+      id: product.id,
+      stock: newStock,
+      updatedAt: timestamp
+    });
+    const updated = this.getProductById(product.id)!;
+    this.enqueue("product", updated.id, "update", updated);
+    this.recordAudit("movimentacao estoque", movement.operatorName, `${product.name}: ${input.type} ${quantity} (${previousStock} -> ${newStock})`);
+    return updated;
+  }
+
+  listProductStockMovements(productId?: string): ProductStockMovement[] {
+    const where = ["company_id = @companyId"];
+    const params: Record<string, unknown> = { companyId: COMPANY_ID };
+    if (productId) {
+      where.push("product_id = @productId");
+      params.productId = productId;
+    }
+    return this.db
+      .prepare(
+        `SELECT id, company_id as companyId, product_id as productId, product_name as productName,
+          type, quantity, previous_stock as previousStock, new_stock as newStock, reason,
+          operator_name as operatorName, created_at as createdAt
+        FROM product_stock_movements
+        WHERE ${where.join(" AND ")}
+        ORDER BY created_at DESC
+        LIMIT 200`
+      )
+      .all(params) as ProductStockMovement[];
+  }
+
   listCustomers(search = ""): Customer[] {
     return this.db
       .prepare(
         `SELECT id, company_id as companyId, name, document, phone, whatsapp, address, notes,
-          credit_limit as creditLimit, balance, lgpd_accepted as lgpdAccepted, active,
+          credit_limit as creditLimit, balance, lgpd_accepted as lgpdAccepted, lgpd_accepted_at as lgpdAcceptedAt, active,
           last_purchase_at as lastPurchaseAt, updated_at as updatedAt, sync_status as syncStatus
         FROM customers
-        WHERE company_id = @companyId AND active = 1 AND (@search = '' OR name LIKE @term OR document LIKE @term OR phone LIKE @term)
+        WHERE company_id = @companyId AND active = 1 AND (@search = '' OR name LIKE @term OR document LIKE @term OR phone LIKE @term OR whatsapp LIKE @term)
         ORDER BY name`
       )
       .all({ companyId: COMPANY_ID, search, term: `%${search}%` }) as Customer[];
@@ -579,10 +722,17 @@ export class LocalDatabase {
     this.assertCurrentPermission(input.id ? "edit_customer" : "create_customer");
     const id = input.id ?? uid("cus");
     const timestamp = now();
+    const existingCustomer = this.getCustomerById(id);
+    if (!input.name?.trim()) throw new Error("Informe o nome do cliente.");
+    if (Number(input.creditLimit ?? 0) < 0 || Number(input.balance ?? 0) < 0) {
+      throw new Error("Limite e saldo nao podem ser negativos.");
+    }
+    const lgpdAccepted = input.lgpdAccepted ?? false;
+    const lgpdAcceptedAt = lgpdAccepted ? input.lgpdAcceptedAt ?? existingCustomer?.lgpdAcceptedAt ?? timestamp : undefined;
     const customer: Customer = {
       id,
       companyId: COMPANY_ID,
-      name: input.name?.trim() || "Cliente sem nome",
+      name: input.name.trim(),
       document: input.document?.trim(),
       phone: input.phone?.trim(),
       whatsapp: input.whatsapp?.trim(),
@@ -590,7 +740,8 @@ export class LocalDatabase {
       notes: input.notes?.trim(),
       creditLimit: Number(input.creditLimit ?? 0),
       balance: Number(input.balance ?? 0),
-      lgpdAccepted: input.lgpdAccepted ?? false,
+      lgpdAccepted,
+      lgpdAcceptedAt,
       active: input.active ?? true,
       lastPurchaseAt: input.lastPurchaseAt,
       updatedAt: timestamp,
@@ -602,21 +753,25 @@ export class LocalDatabase {
         .prepare(
           `UPDATE customers SET name = @name, document = @document, phone = @phone, whatsapp = @whatsapp,
           address = @address, notes = @notes, credit_limit = @creditLimit, balance = @balance,
-          lgpd_accepted = @lgpdAccepted, active = @active, last_purchase_at = @lastPurchaseAt,
+          lgpd_accepted = @lgpdAccepted, lgpd_accepted_at = @lgpdAcceptedAt, active = @active, last_purchase_at = @lastPurchaseAt,
           updated_at = @updatedAt, sync_status = @syncStatus WHERE id = @id`
       )
         .run(customer);
       this.enqueue("customer", id, "update", customer);
       this.recordAudit("cliente editado", this.getCurrentOperatorName(), customer.name);
+      if (!existingCustomer?.lgpdAccepted && customer.lgpdAccepted) {
+        this.recordAudit("aceite LGPD", this.getCurrentOperatorName(), customer.name);
+      }
     } else {
       this.db
         .prepare(
-          `INSERT INTO customers (id, company_id, name, document, phone, whatsapp, address, notes, credit_limit, balance, lgpd_accepted, active, last_purchase_at, updated_at, sync_status)
-          VALUES (@id, @companyId, @name, @document, @phone, @whatsapp, @address, @notes, @creditLimit, @balance, @lgpdAccepted, @active, @lastPurchaseAt, @updatedAt, @syncStatus)`
+          `INSERT INTO customers (id, company_id, name, document, phone, whatsapp, address, notes, credit_limit, balance, lgpd_accepted, lgpd_accepted_at, active, last_purchase_at, updated_at, sync_status)
+          VALUES (@id, @companyId, @name, @document, @phone, @whatsapp, @address, @notes, @creditLimit, @balance, @lgpdAccepted, @lgpdAcceptedAt, @active, @lastPurchaseAt, @updatedAt, @syncStatus)`
         )
         .run(customer);
       this.enqueue("customer", id, "create", customer);
       this.recordAudit("cliente criado", this.getCurrentOperatorName(), customer.name);
+      if (customer.lgpdAccepted) this.recordAudit("aceite LGPD", this.getCurrentOperatorName(), customer.name);
     }
     return customer;
   }
@@ -637,8 +792,10 @@ export class LocalDatabase {
   }
 
   registerCustomerPayment(customerId: string, amount: number): Customer {
+    this.assertCurrentPermission("edit_customer");
     const customer = this.getCustomerById(customerId);
     if (!customer) throw new Error("Cliente nao encontrado.");
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) throw new Error("Valor de pagamento invalido.");
     const timestamp = now();
     this.db
       .prepare("UPDATE customers SET balance = MAX(balance - @amount, 0), updated_at = @updatedAt, sync_status = 'pending' WHERE id = @id")
@@ -671,6 +828,11 @@ export class LocalDatabase {
 
   checkoutSale(input: CheckoutInput): Sale & { receiptHtml: string } {
     this.assertCurrentPermission("sell");
+    if (!input.items.length) throw new Error("Adicione ao menos um item para finalizar a venda.");
+    if (!input.payments.length) throw new Error("Informe uma forma de pagamento.");
+    if (input.payments.some((payment) => payment.method === "pix")) {
+      assertLicensedModule(this, "pix");
+    }
     const createSale = this.db.transaction(() => {
       const cashRegister = this.ensureOpenCashRegister();
       const operator = this.getCurrentOperator();
@@ -682,6 +844,8 @@ export class LocalDatabase {
           const itemDiscount = Number(cartItem.discount ?? 0);
           const quantity = Number(cartItem.quantity || 1);
           const unitPrice = Number(cartItem.unitPrice ?? 0);
+          if (quantity <= 0 || unitPrice <= 0) throw new Error("Produto diverso precisa de valor e quantidade validos.");
+          if (itemDiscount < 0 || itemDiscount >= unitPrice * quantity) throw new Error("Desconto de item invalido.");
           const total = roundMoney(unitPrice * quantity - itemDiscount);
           return {
             id: uid("sit"),
@@ -697,8 +861,10 @@ export class LocalDatabase {
         }
         const product = this.getProductById(cartItem.productId);
         if (!product) throw new Error("Produto nao encontrado.");
+        if (!product.active) throw new Error(`${product.name} esta inativo.`);
         ensureProductCanSell(product, cartItem.quantity);
         const itemDiscount = Number(cartItem.discount ?? 0);
+        if (itemDiscount < 0 || itemDiscount >= product.price * cartItem.quantity) throw new Error("Desconto de item invalido.");
         const total = roundMoney(product.price * cartItem.quantity - itemDiscount);
         return {
           id: uid("sit"),
@@ -720,7 +886,17 @@ export class LocalDatabase {
         amount: Number(payment.amount),
         change: 0
       }));
-      const totals = calculateSaleTotals(saleItems, payments, Number(input.discount ?? 0));
+      if (payments.some((payment) => payment.amount <= 0)) throw new Error("Valor de pagamento invalido.");
+      const saleDiscount = Number(input.discount ?? 0);
+      if (saleDiscount < 0) throw new Error("Desconto da venda invalido.");
+      const totals = calculateSaleTotals(saleItems, payments, saleDiscount);
+      if (saleDiscount > totals.subtotal) throw new Error("Desconto maior que o subtotal da venda.");
+      const discountPercent = totals.subtotal > 0 ? (saleDiscount / totals.subtotal) * 100 : 0;
+      if (discountPercent > 5.0001) {
+        this.assertDiscountPermission("apply_high_discount", input.highDiscountAuthorizationToken);
+      } else if (saleDiscount > 0) {
+        this.assertDiscountPermission("apply_discount", input.highDiscountAuthorizationToken);
+      }
       if (totals.paid < totals.total) {
         throw new Error("Pagamento insuficiente para finalizar a venda.");
       }
@@ -733,7 +909,13 @@ export class LocalDatabase {
         .reduce((sum, payment) => sum + payment.amount, 0);
       if (storeCreditAmount > 0) {
         if (!customer) throw new Error("Selecione um cliente para venda fiado.");
-        if (customer.balance + storeCreditAmount > customer.creditLimit) throw new Error("Limite fiado insuficiente.");
+        if (customer.balance + storeCreditAmount > customer.creditLimit) {
+          this.assertAuthorizedPermission(
+            "authorize_store_credit_limit",
+            input.storeCreditAuthorizationToken,
+            "Limite fiado insuficiente. Solicite autorizacao de gerente/admin."
+          );
+        }
       }
       const sale: Sale = {
         id: saleId,
@@ -746,7 +928,7 @@ export class LocalDatabase {
         items: saleItems,
         payments,
         subtotal: totals.subtotal,
-        discount: Number(input.discount ?? 0),
+        discount: saleDiscount,
         total: totals.total,
         profit: totals.profit,
         notes: input.notes,
@@ -1138,15 +1320,17 @@ export class LocalDatabase {
   getLicense() {
     const row = this.db
       .prepare(
-        `SELECT id, company_id as companyId, key, status, valid_until as validUntil,
+        `SELECT id, company_id as companyId, key, plan, status, valid_until as validUntil,
           demo_mode as demoMode, cloud_enabled as cloudEnabled, fiscal_enabled as fiscalEnabled,
           pix_enabled as pixEnabled, mobile_enabled as mobileEnabled, intelligence_enabled as intelligenceEnabled,
-          owner_email as ownerEmail, activated_at as activatedAt
+          owner_email as ownerEmail, establishment_name as establishmentName, issued_at as issuedAt,
+          activated_at as activatedAt, last_validated_at as lastValidatedAt,
+          validation_mode as validationMode, signature, features_json as featuresJson
         FROM licenses WHERE company_id = ? LIMIT 1`
       )
       .get(COMPANY_ID) as (License & Record<string, unknown>) | undefined;
     if (!row) return undefined;
-    return {
+    return normalizeStoredLicense({
       ...row,
       demoMode: toBoolean(row.demoMode),
       cloudEnabled: toBoolean(row.cloudEnabled),
@@ -1154,59 +1338,60 @@ export class LocalDatabase {
       pixEnabled: toBoolean(row.pixEnabled),
       mobileEnabled: toBoolean(row.mobileEnabled),
       intelligenceEnabled: toBoolean(row.intelligenceEnabled)
-    };
+    } as License & { featuresJson?: string });
   }
 
   getSystemState(): SystemState {
     const backup = this.getBackupState();
+    const license = this.getLicense() as SystemState["license"];
+    const licenseCheck = checkStoredLicense(license);
     return {
-      activated: this.getSetting("system_activated") === "true",
-      cloudEnabled: this.getSetting("cloud_enabled") === "true",
+      activated: this.getSetting("system_activated") === "true" && licenseCheck.valid,
+      cloudEnabled: licenseCheck.cloudEnabled,
       allowSalesWithoutCashRegister: this.getSetting("allow_sales_without_cash_register") === "true",
       usePermissions: this.getSetting("use_permissions") === "true",
       locationControl: this.getSetting("location_control") === "true",
       automaticBackupEnabled: backup.automaticBackupEnabled,
       backupPath: backup.backupPath,
+      blockNegativeStock: this.getSetting("block_negative_stock") !== "false",
+      receiptWidthMm: this.getSetting("receipt_width_mm") === "58" ? 58 : 80,
+      receiptFooterMessage: this.getSetting("receipt_footer_message") || "Obrigado pela preferencia.",
+      receiptAutoPrint: this.getSetting("receipt_auto_print") !== "false",
       company: this.getCompany(),
-      license: this.getLicense() as SystemState["license"]
+      license
     };
   }
 
   activateSystem(input: ActivationInput): SystemState {
-    const key = input.licenseKey.trim().toUpperCase();
-    if (!["NEXPDV-OFFLINE-2026", "NEXPDV-CLOUD-2026"].includes(key)) {
-      throw new Error("Chave de ativacao invalida.");
-    }
+    this.assertCurrentPermission("activate_license");
     const timestamp = now();
-    const validUntil = new Date("2099-12-31T23:59:59.000Z").toISOString();
-    const cloudEnabled = key === "NEXPDV-CLOUD-2026";
-    const mobileEnabled = cloudEnabled;
+    const license = createLocalLicenseActivation(input, COMPANY_ID, timestamp);
     this.db
       .prepare(
         `UPDATE companies SET trade_name = @tradeName, name = @name, owner_email = @ownerEmail,
           updated_at = @updatedAt WHERE id = @id`
       )
-      .run({ id: COMPANY_ID, tradeName: input.companyName.trim(), name: input.companyName.trim(), ownerEmail: input.ownerEmail.trim(), updatedAt: timestamp });
-    this.db.prepare("DELETE FROM licenses WHERE company_id = ?").run(COMPANY_ID);
-    this.db
-      .prepare(
-        `INSERT INTO licenses (id, company_id, key, status, valid_until, demo_mode, cloud_enabled, fiscal_enabled, pix_enabled, mobile_enabled, intelligence_enabled, owner_email, activated_at)
-        VALUES (@id, @companyId, @key, 'active', @validUntil, 0, @cloudEnabled, 0, 0, @mobileEnabled, 0, @ownerEmail, @activatedAt)`
-      )
-      .run({ id: "lic_local", companyId: COMPANY_ID, key, validUntil, cloudEnabled, mobileEnabled, ownerEmail: input.ownerEmail.trim(), activatedAt: timestamp });
+      .run({ id: COMPANY_ID, tradeName: license.establishmentName, name: license.establishmentName, ownerEmail: license.ownerEmail, updatedAt: timestamp });
+    this.saveLicenseRecord(license);
     this.setSetting("system_activated", "true");
-    this.setSetting("cloud_enabled", String(cloudEnabled));
-    this.recordAudit("sistema ativado", input.ownerEmail.trim(), key);
+    this.setSetting("cloud_enabled", String(license.features.cloud));
+    this.recordAudit("licenca ativada", license.ownerEmail, `${license.plan}: ${license.key}`);
+    this.recordAudit("sistema ativado", license.ownerEmail, license.establishmentName);
     return this.getSystemState();
   }
 
   activateCloud(input: CloudActivationInput): SystemState {
-    if (input.cloudKey.trim().toUpperCase() !== "NEXPDV-CLOUD-2026") throw new Error("Chave cloud invalida.");
+    this.assertCurrentPermission("activate_cloud");
+    const company = this.getCompany();
+    const companyName = company.tradeName || company.name || "NexPDV Store";
+    const license = createLocalLicenseActivation({ ownerEmail: input.ownerEmail, licenseKey: input.cloudKey, companyName }, COMPANY_ID, now());
+    if (!license.features.cloud) {
+      throw new Error("A chave informada nao libera o modo Cloud.");
+    }
+    this.saveLicenseRecord(license);
+    this.setSetting("system_activated", "true");
     this.setSetting("cloud_enabled", "true");
-    this.db
-      .prepare("UPDATE licenses SET key = @key, cloud_enabled = 1, mobile_enabled = 1, owner_email = @ownerEmail, status = 'active' WHERE company_id = @companyId")
-      .run({ key: "NEXPDV-CLOUD-2026", ownerEmail: input.ownerEmail.trim(), companyId: COMPANY_ID });
-    this.recordAudit("cloud ativado", input.ownerEmail.trim(), "Modo Cloud liberado");
+    this.recordAudit("cloud ativado", input.ownerEmail.trim(), `Plano ${license.plan}`);
     return this.getSystemState();
   }
 
@@ -1324,13 +1509,14 @@ export class LocalDatabase {
     return this.getAuthState();
   }
 
-  authorizeCredential(input: AuthCredentialInput): { ok: boolean; user?: UserAccount; message: string } {
+  authorizeCredential(input: AuthCredentialInput): AuthAuthorizationResult {
     try {
       const user = this.requireCredential(input);
       if (input.requireManager && !managerRoleCodes.has(user.role)) throw new Error("A acao requer gerente ou administrador.");
       if (input.permission && !this.userHasPermission(user.id, input.permission)) throw new Error("Usuario sem permissao para esta acao.");
+      const token = input.permission ? this.createAuthorizationToken(user.id, input.permission) : undefined;
       this.recordAuthLog(user.id, "authorize", true, input.permission ?? "manager");
-      return { ok: true, user, message: "Autorizado." };
+      return { ok: true, user, message: "Autorizado.", token };
     } catch (error) {
       this.recordAuthLog(undefined, "authorize", false, input.permission ?? "manager");
       this.recordAudit("tentativa acao negada", input.login || "credencial informada", input.permission ?? "manager");
@@ -1339,6 +1525,7 @@ export class LocalDatabase {
   }
 
   saveSecuritySettings(input: Partial<SecuritySettings>): SecuritySettings {
+    this.assertCurrentPermission("access_settings");
     const entries: Array<[keyof SecuritySettings, unknown]> = [
       ["requireLoginOnStart", input.requireLoginOnStart],
       ["allowQuickPin", input.allowQuickPin],
@@ -1357,13 +1544,17 @@ export class LocalDatabase {
   }
 
   saveUser(input: SaveUserInput): UserAccount {
+    this.assertCurrentPermission("manage_users");
     if (!input.name.trim()) throw new Error("Informe o nome do usuario.");
     if (!input.username.trim()) throw new Error("Informe o login do usuario.");
     if (!input.id && (!input.password || input.password.length < 6)) throw new Error("Senha deve ter pelo menos 6 caracteres.");
     if (!input.id && (!input.pin || !/^\d{4,8}$/.test(input.pin))) throw new Error("PIN deve ser numerico com 4 a 8 digitos.");
     const role = this.getRoleById(input.roleId);
     if (!role) throw new Error("Cargo invalido.");
+    if (!toBoolean(role.active)) throw new Error("Cargo inativo nao pode ser atribuido.");
     const id = input.id ?? uid("usr");
+    const duplicateLogin = this.db.prepare("SELECT id FROM users WHERE company_id = ? AND lower(username) = ? AND id <> ? LIMIT 1").get(COMPANY_ID, normalizeLogin(input.username), id);
+    if (duplicateLogin) throw new Error("Ja existe usuario com este login.");
     const existing = input.id ? this.getUserAccountById(input.id) : undefined;
     const timestamp = now();
     const payload = {
@@ -1403,10 +1594,15 @@ export class LocalDatabase {
         .run(payload);
       this.recordAudit("usuario criado", this.getCurrentOperatorName(), payload.name);
     }
+    if (input.permissionOverrides) {
+      this.saveUserPermissionOverrides(id, input.permissionOverrides);
+      this.recordAudit("alteracao permissoes", this.getCurrentOperatorName(), payload.name);
+    }
     return this.getUserAccountById(id)!;
   }
 
   setUserActive(userId: string, active: boolean): UserAccount {
+    this.assertCurrentPermission("manage_users");
     this.db.prepare("UPDATE users SET active = @active, updated_at = @updatedAt WHERE company_id = @companyId AND id = @id").run({
       id: userId,
       companyId: COMPANY_ID,
@@ -1420,6 +1616,7 @@ export class LocalDatabase {
   }
 
   resetUserPassword(userId: string, password: string): UserAccount {
+    this.assertCurrentPermission("manage_users");
     if (password.length < 6) throw new Error("Senha deve ter pelo menos 6 caracteres.");
     this.db.prepare("UPDATE users SET password_hash = @passwordHash, updated_at = @updatedAt WHERE id = @id").run({
       id: userId,
@@ -1433,6 +1630,7 @@ export class LocalDatabase {
   }
 
   resetUserPin(userId: string, pin: string): UserAccount {
+    this.assertCurrentPermission("manage_users");
     if (!/^\d{4,8}$/.test(pin)) throw new Error("PIN deve ser numerico com 4 a 8 digitos.");
     this.db.prepare("UPDATE users SET pin_hash = @pinHash, updated_at = @updatedAt WHERE id = @id").run({
       id: userId,
@@ -1477,6 +1675,7 @@ export class LocalDatabase {
   }
 
   updateCompany(input: Partial<Company>): Partial<Company> {
+    this.assertCurrentPermission("access_settings");
     const timestamp = now();
     this.db
       .prepare(
@@ -1508,7 +1707,18 @@ export class LocalDatabase {
     return this.getCompany();
   }
 
-  updateSettings(input: { usePermissions?: boolean; locationControl?: boolean; allowSalesWithoutCashRegister?: boolean; automaticBackupEnabled?: boolean; backupPath?: string }): SystemState {
+  updateSettings(input: {
+    usePermissions?: boolean;
+    locationControl?: boolean;
+    allowSalesWithoutCashRegister?: boolean;
+    blockNegativeStock?: boolean;
+    automaticBackupEnabled?: boolean;
+    backupPath?: string;
+    receiptWidthMm?: 58 | 80;
+    receiptFooterMessage?: string;
+    receiptAutoPrint?: boolean;
+  }): SystemState {
+    this.assertCurrentPermission("access_settings");
     if (typeof input.usePermissions === "boolean") {
       this.setSetting("use_permissions", String(input.usePermissions));
       this.recordAudit("permissoes alteradas", this.getCurrentOperatorName(), `Controle ${input.usePermissions ? "ativado" : "desativado"}`);
@@ -1521,6 +1731,10 @@ export class LocalDatabase {
       this.setSetting("allow_sales_without_cash_register", String(input.allowSalesWithoutCashRegister));
       this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Venda com caixa fechado ${input.allowSalesWithoutCashRegister ? "permitida" : "bloqueada"}`);
     }
+    if (typeof input.blockNegativeStock === "boolean") {
+      this.setSetting("block_negative_stock", String(input.blockNegativeStock));
+      this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Estoque negativo ${input.blockNegativeStock ? "bloqueado" : "permitido"}`);
+    }
     if (typeof input.automaticBackupEnabled === "boolean") {
       this.setSetting("automatic_backup_enabled", String(input.automaticBackupEnabled));
       this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Backup automatico ${input.automaticBackupEnabled ? "ativado" : "desativado"}`);
@@ -1528,6 +1742,18 @@ export class LocalDatabase {
     if (typeof input.backupPath === "string" && input.backupPath.trim()) {
       this.setSetting("backup_path", input.backupPath.trim());
       this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Caminho backup: ${input.backupPath.trim()}`);
+    }
+    if (input.receiptWidthMm === 58 || input.receiptWidthMm === 80) {
+      this.setSetting("receipt_width_mm", String(input.receiptWidthMm));
+      this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Cupom ${input.receiptWidthMm}mm`);
+    }
+    if (typeof input.receiptFooterMessage === "string") {
+      this.setSetting("receipt_footer_message", input.receiptFooterMessage.trim() || "Obrigado pela preferencia.");
+      this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), "Mensagem do cupom atualizada");
+    }
+    if (typeof input.receiptAutoPrint === "boolean") {
+      this.setSetting("receipt_auto_print", String(input.receiptAutoPrint));
+      this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Impressao automatica ${input.receiptAutoPrint ? "ativada" : "desativada"}`);
     }
     return this.getSystemState();
   }
@@ -1537,10 +1763,13 @@ export class LocalDatabase {
   }
 
   savePixConfig(input: Partial<PixConfig>): PixConfig {
+    this.assertCurrentPermission("configure_pix");
+    assertLicensedModule(this, "pix");
     return this.pixService().savePixConfig(input);
   }
 
   createPixChargeMock(amount: number, saleId?: string): PixCharge {
+    assertLicensedModule(this, "pix");
     return this.pixService().createChargeMock(amount, saleId);
   }
 
@@ -1549,18 +1778,22 @@ export class LocalDatabase {
   }
 
   cancelPixChargeMock(chargeId: string): PixCharge {
+    assertLicensedModule(this, "pix");
     return this.pixService().cancelChargeMock(chargeId);
   }
 
   confirmPixChargeMock(chargeId: string): PixCharge {
+    assertLicensedModule(this, "pix");
     return this.pixService().confirmChargeMock(chargeId);
   }
 
   generateStaticPixQrCodePayload(): string {
+    assertLicensedModule(this, "pix");
     return this.pixService().generateStaticQrCodePayload();
   }
 
   generateDynamicPixQrCodeMock(amount: number, saleId?: string): string {
+    assertLicensedModule(this, "pix");
     return this.pixService().generateDynamicQrCodeMock(amount, saleId);
   }
 
@@ -1569,18 +1802,26 @@ export class LocalDatabase {
   }
 
   saveFiscalConfig(input: Partial<FiscalConfig>): FiscalConfig {
+    this.assertCurrentPermission("configure_fiscal");
+    assertLicensedModule(this, "fiscal");
     return this.fiscalService().saveFiscalConfig(input);
   }
 
   validateFiscalConfig(): { valid: boolean; errors: string[] } {
+    this.assertCurrentPermission("configure_fiscal");
+    assertLicensedModule(this, "fiscal");
     return this.fiscalService().validateFiscalConfig();
   }
 
   issueNfceMock(saleId: string): FiscalDocument {
+    this.assertCurrentPermission("issue_fiscal");
+    assertLicensedModule(this, "fiscal");
     return this.fiscalService().issueNfceMock(saleId);
   }
 
   cancelFiscalDocumentMock(documentId: string): FiscalDocument {
+    this.assertCurrentPermission("cancel_fiscal");
+    assertLicensedModule(this, "fiscal");
     return this.fiscalService().cancelFiscalDocumentMock(documentId);
   }
 
@@ -1595,9 +1836,9 @@ export class LocalDatabase {
   listSecurity(): SecurityState {
     const roles = this.db
       .prepare(
-        `SELECT r.id, r.name, r.code, r.level
+        `SELECT r.id, r.name, r.code, r.level, r.active
         FROM roles r
-        WHERE r.company_id = ? AND r.active = 1
+        WHERE r.company_id = ?
         ORDER BY r.level DESC`
       )
       .all(COMPANY_ID) as Omit<RoleAccount, "permissions">[];
@@ -1613,7 +1854,16 @@ export class LocalDatabase {
         ORDER BY r.level DESC, u.name`
       )
       .all(COMPANY_ID)
-      .map((user: any) => ({ ...user, permissions: this.getUserPermissions(user.id) })) as UserAccount[];
+      .map((user: any) => {
+        const details = this.getUserPermissionDetails(user.id);
+        return {
+          ...user,
+          permissions: details.effective,
+          inheritedPermissions: details.inherited,
+          addedPermissions: details.added,
+          removedPermissions: details.removed
+        };
+      }) as UserAccount[];
     const sectors = ["Caixa", "Estoque", "Administrativo", "Gerencia"].map((name) => ({
       name,
       description:
@@ -1637,7 +1887,79 @@ export class LocalDatabase {
     };
   }
 
+  saveRole(input: SaveRoleInput): RoleAccount {
+    this.assertCurrentPermission("manage_users");
+    if (!input.name.trim()) throw new Error("Informe o nome do cargo.");
+    const id = input.id ?? uid("role");
+    const existing = input.id ? this.getRoleById(input.id) : undefined;
+    const code = existing?.code ?? input.code?.trim().toLowerCase().replace(/[^a-z0-9_]+/g, "_") ?? `custom_${Date.now()}`;
+    const permissions = this.normalizePermissionList(input.permissions);
+    const timestamp = now();
+    const role = {
+      id,
+      companyId: COMPANY_ID,
+      name: input.name.trim(),
+      code,
+      level: Number(input.level ?? existing?.level ?? 30),
+      active: input.active ?? true,
+      updatedAt: timestamp
+    };
+    this.db
+      .prepare(
+        `INSERT INTO roles (id, company_id, name, code, level, active, updated_at)
+        VALUES (@id, @companyId, @name, @code, @level, @active, @updatedAt)
+        ON CONFLICT(id) DO UPDATE SET name = @name, level = @level, active = @active, updated_at = @updatedAt`
+      )
+      .run(role);
+    this.replaceRolePermissions(id, permissions);
+    this.recordAudit("permissoes alteradas", this.getCurrentOperatorName(), role.name);
+    return this.getRoleAccountById(id)!;
+  }
+
+  duplicateRole(roleId: string): RoleAccount {
+    this.assertCurrentPermission("manage_users");
+    const source = this.getRoleAccountById(roleId);
+    if (!source) throw new Error("Cargo nao encontrado.");
+    return this.saveRole({
+      name: `${source.name} copia`,
+      code: `${source.code}_copy_${Date.now()}`,
+      level: Math.max(1, source.level - 1),
+      active: true,
+      permissions: source.permissions
+    });
+  }
+
+  setRoleActive(roleId: string, active: boolean): RoleAccount {
+    this.assertCurrentPermission("manage_users");
+    const role = this.getRoleAccountById(roleId);
+    if (!role) throw new Error("Cargo nao encontrado.");
+    if (!active) {
+      const inUse = this.db.prepare("SELECT id FROM users WHERE role_id = ? AND active = 1 LIMIT 1").get(roleId);
+      if (inUse) throw new Error("Nao e possivel inativar cargo em uso por usuario ativo.");
+    }
+    this.db.prepare("UPDATE roles SET active = @active, updated_at = @updatedAt WHERE id = @id").run({ id: roleId, active, updatedAt: now() });
+    const updated = this.getRoleAccountById(roleId)!;
+    this.recordAudit(active ? "cargo ativado" : "cargo inativado", this.getCurrentOperatorName(), updated.name);
+    return updated;
+  }
+
+  resetRoleDefaults(roleId: string): RoleAccount {
+    this.assertCurrentPermission("manage_users");
+    const role = this.getRoleAccountById(roleId);
+    if (!role) throw new Error("Cargo nao encontrado.");
+    const seed = roleSeeds.find((item) => item.id === roleId || item.code === role.code);
+    if (!seed) throw new Error("Este cargo nao possui padrao para restaurar.");
+    this.db
+      .prepare("UPDATE roles SET name = @name, code = @code, level = @level, active = 1, updated_at = @updatedAt WHERE id = @id")
+      .run({ id: roleId, name: seed.name, code: seed.code, level: seed.level, updatedAt: now() });
+    this.replaceRolePermissions(roleId, seed.permissions);
+    const updated = this.getRoleAccountById(roleId)!;
+    this.recordAudit("permissoes alteradas", this.getCurrentOperatorName(), `Restaurado padrao: ${updated.name}`);
+    return updated;
+  }
+
   listAudit(limit = 80): AuditEntry[] {
+    this.assertCurrentPermission("access_audit");
     return this.db
       .prepare("SELECT id, action, actor, details, created_at as createdAt FROM audit_logs ORDER BY created_at DESC LIMIT ?")
       .all(limit) as AuditEntry[];
@@ -1652,6 +1974,7 @@ export class LocalDatabase {
   }
 
   exportLocalBackup(): BackupState & { filePath: string } {
+    this.assertCurrentPermission("export_backup");
     const backupDir = this.getSetting("backup_path") || this.getDefaultBackupDir();
     const filePath = this.writeBackupFile(backupDir, "manual");
     this.setSetting("last_backup_at", now());
@@ -1660,6 +1983,7 @@ export class LocalDatabase {
   }
 
   restoreLocalBackup(filePath: string): BackupState {
+    this.assertCurrentPermission("restore_backup");
     const resolved = path.resolve(filePath.trim());
     if (!fs.existsSync(resolved)) throw new Error("Arquivo de backup nao encontrado.");
     const bytes = fs.readFileSync(resolved);
@@ -1743,10 +2067,38 @@ export class LocalDatabase {
       .get({ companyId: COMPANY_ID, id: sessionId }) as AuthSession | undefined;
   }
 
-  private getRoleById(roleId: string): { id: string; name: string; code: string; level: number } | undefined {
-    return this.db.prepare("SELECT id, name, code, level FROM roles WHERE company_id = ? AND id = ? LIMIT 1").get(COMPANY_ID, roleId) as
-      | { id: string; name: string; code: string; level: number }
+  private getRoleById(roleId: string): { id: string; name: string; code: string; level: number; active: boolean } | undefined {
+    return this.db.prepare("SELECT id, name, code, level, active FROM roles WHERE company_id = ? AND id = ? LIMIT 1").get(COMPANY_ID, roleId) as
+      | { id: string; name: string; code: string; level: number; active: boolean }
       | undefined;
+  }
+
+  private getRoleAccountById(roleId: string): RoleAccount | undefined {
+    const role = this.getRoleById(roleId);
+    if (!role) return undefined;
+    return {
+      ...role,
+      active: toBoolean(role.active),
+      permissions: this.getRolePermissions(roleId)
+    };
+  }
+
+  private getRolePermissions(roleId: string): PermissionKey[] {
+    return this.db
+      .prepare("SELECT permission_key as permission FROM role_permissions WHERE role_id = ? ORDER BY permission_key")
+      .all(roleId)
+      .map((row: any) => row.permission) as PermissionKey[];
+  }
+
+  private normalizePermissionList(permissions: PermissionKey[]): PermissionKey[] {
+    return Array.from(new Set(permissions.filter((permission): permission is PermissionKey => PERMISSIONS.includes(permission))));
+  }
+
+  private replaceRolePermissions(roleId: string, permissions: PermissionKey[]): void {
+    this.db.prepare("DELETE FROM role_permissions WHERE role_id = ?").run(roleId);
+    permissions.forEach((permission) => {
+      this.db.prepare("INSERT OR IGNORE INTO role_permissions (role_id, permission_key) VALUES (?, ?)").run(roleId, permission);
+    });
   }
 
   private getUserAccountById(userId: string): UserAccount | undefined {
@@ -1761,7 +2113,7 @@ export class LocalDatabase {
         LIMIT 1`
       )
       .get({ companyId: COMPANY_ID, id: userId }) as UserAccount | undefined;
-    return user ? { ...user, permissions: this.getUserPermissions(user.id) } : undefined;
+    return user ? this.withPermissionDetails(user) : undefined;
   }
 
   private findUserByLogin(login: string): UserAccount | undefined {
@@ -1779,7 +2131,7 @@ export class LocalDatabase {
         LIMIT 1`
       )
       .get({ companyId: COMPANY_ID, login: normalized }) as UserAccount | undefined;
-    return user ? { ...user, permissions: this.getUserPermissions(user.id) } : undefined;
+    return user ? this.withPermissionDetails(user) : undefined;
   }
 
   private findUserByCredential(input: AuthCredentialInput): UserAccount | undefined {
@@ -1804,7 +2156,7 @@ export class LocalDatabase {
         LIMIT 1`
       )
       .get({ companyId: COMPANY_ID, passwordHash, legacyPasswordHash, pinHash }) as UserAccount | undefined;
-    return user ? { ...user, permissions: this.getUserPermissions(user.id) } : undefined;
+    return user ? this.withPermissionDetails(user) : undefined;
   }
 
   private verifyUserCredential(userId: string, input: { password?: string; pin?: string }): boolean {
@@ -1830,8 +2182,28 @@ export class LocalDatabase {
     return user;
   }
 
+  private withPermissionDetails(user: UserAccount): UserAccount {
+    const details = this.getUserPermissionDetails(user.id);
+    return {
+      ...user,
+      permissions: details.effective,
+      inheritedPermissions: details.inherited,
+      addedPermissions: details.added,
+      removedPermissions: details.removed
+    };
+  }
+
   private getUserPermissions(userId: string): PermissionKey[] {
-    return this.db
+    return this.getUserPermissionDetails(userId).effective;
+  }
+
+  private getUserPermissionDetails(userId: string): {
+    inherited: PermissionKey[];
+    added: PermissionKey[];
+    removed: PermissionKey[];
+    effective: PermissionKey[];
+  } {
+    const inherited = this.db
       .prepare(
         `SELECT rp.permission_key as permission
         FROM users u
@@ -1840,20 +2212,32 @@ export class LocalDatabase {
       )
       .all({ userId })
       .map((row: any) => row.permission) as PermissionKey[];
+    const overrides = this.db
+      .prepare("SELECT permission_key as permission, effect FROM user_permission_overrides WHERE user_id = ?")
+      .all(userId) as Array<{ permission: PermissionKey; effect: "allow" | "deny" }>;
+    const added = overrides.filter((item) => item.effect === "allow").map((item) => item.permission);
+    const removed = overrides.filter((item) => item.effect === "deny").map((item) => item.permission);
+    const effective = Array.from(new Set([...inherited, ...added])).filter((permission) => !removed.includes(permission));
+    return { inherited, added, removed, effective };
+  }
+
+  private saveUserPermissionOverrides(userId: string, overrides: Array<{ permission: PermissionKey; effect: "allow" | "deny" }>): void {
+    this.db.prepare("DELETE FROM user_permission_overrides WHERE user_id = ?").run(userId);
+    const timestamp = now();
+    overrides
+      .filter((item) => PERMISSIONS.includes(item.permission) && ["allow", "deny"].includes(item.effect))
+      .forEach((item) => {
+        this.db
+          .prepare(
+            `INSERT OR REPLACE INTO user_permission_overrides (user_id, permission_key, effect, updated_at)
+            VALUES (@userId, @permission, @effect, @updatedAt)`
+          )
+          .run({ userId, permission: item.permission, effect: item.effect, updatedAt: timestamp });
+      });
   }
 
   private userHasPermission(userId: string, permission: PermissionKey): boolean {
-    return Boolean(
-      this.db
-        .prepare(
-          `SELECT rp.permission_key
-          FROM users u
-          JOIN role_permissions rp ON rp.role_id = u.role_id
-          WHERE u.id = @userId AND rp.permission_key = @permission
-          LIMIT 1`
-        )
-        .get({ userId, permission })
-    );
+    return this.getUserPermissions(userId).includes(permission);
   }
 
   private getCurrentOperator(): UserAccount {
@@ -1884,6 +2268,41 @@ export class LocalDatabase {
     if (this.userHasPermission(user.id, permission)) return;
     this.recordAudit("tentativa acao negada", user.name, permission);
     throw new Error("Acao requer autorizacao.");
+  }
+
+  private assertDiscountPermission(permission: "apply_discount" | "apply_high_discount", token?: string): void {
+    this.assertAuthorizedPermission(
+      permission,
+      token,
+      permission === "apply_high_discount" ? "Desconto acima de 5% requer autorizacao de gerente." : "Desconto requer autorizacao."
+    );
+  }
+
+  private assertAuthorizedPermission(permission: PermissionKey, token: string | undefined, message: string): void {
+    const sensitiveWithoutRbac = permission === "apply_high_discount" || permission === "authorize_store_credit_limit";
+    if (this.getSetting("use_permissions") !== "true" && !sensitiveWithoutRbac) return;
+    const user = this.getCurrentOperator();
+    if (this.userHasPermission(user.id, permission)) return;
+    if (this.consumeAuthorizationToken(permission, token)) return;
+    this.recordAudit("tentativa acao negada", user.name, permission);
+    throw new Error(message);
+  }
+
+  private createAuthorizationToken(userId: string, permission: PermissionKey): string {
+    const token = uid("authz");
+    this.authorizationTokens.set(token, {
+      userId,
+      permission,
+      expiresAt: Date.now() + 15 * 60_000
+    });
+    return token;
+  }
+
+  private consumeAuthorizationToken(permission: PermissionKey, token?: string): boolean {
+    if (!token) return false;
+    const authorization = this.authorizationTokens.get(token);
+    this.authorizationTokens.delete(token);
+    return Boolean(authorization && authorization.permission === permission && authorization.expiresAt >= Date.now());
   }
 
   private recordAuthLog(userId: string | undefined, action: string, success: boolean, details = ""): void {
@@ -1924,6 +2343,55 @@ export class LocalDatabase {
 
   private fiscalService(): FiscalService {
     return new FiscalService(this.db, COMPANY_ID, (action, actor, details) => this.recordAudit(action, actor ?? this.getCurrentOperatorName(), details));
+  }
+
+  private ensureLicenseStorage(): void {
+    const license = this.getLicense() as LocalLicenseRecord | undefined;
+    if (!license) return;
+    this.saveLicenseRecord(license);
+    if (this.getSetting("system_activated") === "true") {
+      this.setSetting("cloud_enabled", String(license.features.cloud));
+    }
+  }
+
+  private saveLicenseRecord(license: LocalLicenseRecord): void {
+    this.db.prepare("DELETE FROM licenses WHERE company_id = ?").run(COMPANY_ID);
+    this.db
+      .prepare(
+        `INSERT INTO licenses (
+          id, company_id, key, plan, status, valid_until, demo_mode,
+          cloud_enabled, fiscal_enabled, pix_enabled, mobile_enabled, intelligence_enabled,
+          owner_email, establishment_name, issued_at, activated_at, last_validated_at,
+          validation_mode, signature, features_json
+        ) VALUES (
+          @id, @companyId, @key, @plan, @status, @validUntil, @demoMode,
+          @cloudEnabled, @fiscalEnabled, @pixEnabled, @mobileEnabled, @intelligenceEnabled,
+          @ownerEmail, @establishmentName, @issuedAt, @activatedAt, @lastValidatedAt,
+          @validationMode, @signature, @featuresJson
+        )`
+      )
+      .run({
+        id: license.id,
+        companyId: COMPANY_ID,
+        key: license.key,
+        plan: license.plan,
+        status: license.status,
+        validUntil: license.validUntil,
+        demoMode: license.demoMode ? 1 : 0,
+        cloudEnabled: license.features.cloud ? 1 : 0,
+        fiscalEnabled: license.features.fiscal ? 1 : 0,
+        pixEnabled: license.features.pix ? 1 : 0,
+        mobileEnabled: license.features.mobile ? 1 : 0,
+        intelligenceEnabled: license.features.intelligence ? 1 : 0,
+        ownerEmail: license.ownerEmail ?? "",
+        establishmentName: license.establishmentName,
+        issuedAt: license.issuedAt,
+        activatedAt: license.activatedAt,
+        lastValidatedAt: license.lastValidatedAt,
+        validationMode: license.validationMode,
+        signature: license.signature,
+        featuresJson: serializeFeatures(license.features)
+      });
   }
 
   private getSetting(key: string): string | undefined {
@@ -2026,6 +2494,14 @@ export class LocalDatabase {
         PRIMARY KEY (role_id, permission_key)
       );
 
+      CREATE TABLE IF NOT EXISTS user_permission_overrides (
+        user_id TEXT NOT NULL,
+        permission_key TEXT NOT NULL,
+        effect TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, permission_key)
+      );
+
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         company_id TEXT NOT NULL,
@@ -2097,6 +2573,20 @@ export class LocalDatabase {
         sync_status TEXT NOT NULL DEFAULT 'synced'
       );
 
+      CREATE TABLE IF NOT EXISTS product_stock_movements (
+        id TEXT PRIMARY KEY,
+        company_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        quantity REAL NOT NULL,
+        previous_stock REAL NOT NULL,
+        new_stock REAL NOT NULL,
+        reason TEXT,
+        operator_name TEXT,
+        created_at TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS customers (
         id TEXT PRIMARY KEY,
         company_id TEXT NOT NULL,
@@ -2109,6 +2599,7 @@ export class LocalDatabase {
         credit_limit REAL NOT NULL DEFAULT 0,
         balance REAL NOT NULL DEFAULT 0,
         lgpd_accepted INTEGER NOT NULL DEFAULT 0,
+        lgpd_accepted_at TEXT,
         active INTEGER NOT NULL DEFAULT 1,
         last_purchase_at TEXT,
         updated_at TEXT NOT NULL,
@@ -2210,6 +2701,7 @@ export class LocalDatabase {
         id TEXT PRIMARY KEY,
         company_id TEXT NOT NULL,
         key TEXT NOT NULL,
+        plan TEXT NOT NULL DEFAULT 'OFFLINE',
         status TEXT NOT NULL,
         valid_until TEXT NOT NULL,
         demo_mode INTEGER NOT NULL DEFAULT 1,
@@ -2219,7 +2711,13 @@ export class LocalDatabase {
         mobile_enabled INTEGER NOT NULL DEFAULT 0,
         intelligence_enabled INTEGER NOT NULL DEFAULT 0,
         owner_email TEXT,
-        activated_at TEXT
+        establishment_name TEXT,
+        issued_at TEXT,
+        activated_at TEXT,
+        last_validated_at TEXT,
+        validation_mode TEXT NOT NULL DEFAULT 'local',
+        signature TEXT,
+        features_json TEXT
       );
 
       CREATE TABLE IF NOT EXISTS pix_config (
@@ -2308,6 +2806,7 @@ export class LocalDatabase {
       CREATE INDEX IF NOT EXISTS idx_fiscal_documents_sale ON fiscal_documents(sale_id);
       CREATE INDEX IF NOT EXISTS idx_sessions_active ON sessions(company_id, active, locked);
       CREATE INDEX IF NOT EXISTS idx_auth_logs_created ON auth_logs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_stock_movements_product ON product_stock_movements(product_id, created_at);
     `);
   }
 
@@ -2344,6 +2843,7 @@ export class LocalDatabase {
     addColumn("products", "sector", "TEXT");
 
     addColumn("customers", "lgpd_accepted", "INTEGER NOT NULL DEFAULT 0");
+    addColumn("customers", "lgpd_accepted_at", "TEXT");
     addColumn("customers", "active", "INTEGER NOT NULL DEFAULT 1");
     addColumn("customers", "last_purchase_at", "TEXT");
 
@@ -2362,6 +2862,13 @@ export class LocalDatabase {
     addColumn("licenses", "mobile_enabled", "INTEGER NOT NULL DEFAULT 0");
     addColumn("licenses", "intelligence_enabled", "INTEGER NOT NULL DEFAULT 0");
     addColumn("licenses", "owner_email", "TEXT");
+    addColumn("licenses", "plan", "TEXT NOT NULL DEFAULT 'OFFLINE'");
+    addColumn("licenses", "establishment_name", "TEXT");
+    addColumn("licenses", "issued_at", "TEXT");
+    addColumn("licenses", "last_validated_at", "TEXT");
+    addColumn("licenses", "validation_mode", "TEXT NOT NULL DEFAULT 'local'");
+    addColumn("licenses", "signature", "TEXT");
+    addColumn("licenses", "features_json", "TEXT");
 
     addColumn("audit_logs", "ip", "TEXT");
     addColumn("audit_logs", "machine_id", "TEXT");
@@ -2373,8 +2880,12 @@ export class LocalDatabase {
       use_permissions: "false",
       location_control: "false",
       allow_sales_without_cash_register: "false",
+      block_negative_stock: "true",
       automatic_backup_enabled: "false",
-      backup_path: this.getDefaultBackupDir()
+      backup_path: this.getDefaultBackupDir(),
+      receipt_width_mm: "80",
+      receipt_footer_message: "Obrigado pela preferencia.",
+      receipt_auto_print: "true"
     };
     Object.entries(defaults).forEach(([key, value]) => {
       if (this.getSetting(key) === undefined) this.setSetting(key, value);
@@ -2396,18 +2907,24 @@ export class LocalDatabase {
 
   private ensureSecuritySeed(): void {
     const timestamp = now();
+    const roleDefaultsVersion = "2026-commercial-v2";
+    const refreshDefaultPermissions = this.getSetting("role_defaults_version") !== roleDefaultsVersion;
     const upsertRole = this.db.prepare(
       `INSERT INTO roles (id, company_id, name, code, level, active, updated_at)
       VALUES (@id, @companyId, @name, @code, @level, 1, @updatedAt)
-      ON CONFLICT(id) DO UPDATE SET name = @name, code = @code, level = @level, active = 1, updated_at = @updatedAt`
+      ON CONFLICT(id) DO UPDATE SET name = @name, code = @code, level = @level, updated_at = @updatedAt`
     );
     roleSeeds.forEach((role) => {
+      const existed = this.db.prepare("SELECT id FROM roles WHERE id = ? LIMIT 1").get(role.id);
       upsertRole.run({ ...role, companyId: COMPANY_ID, updatedAt: timestamp });
-      this.db.prepare("DELETE FROM role_permissions WHERE role_id = ?").run(role.id);
-      role.permissions.forEach((permission) => {
-        this.db.prepare("INSERT OR IGNORE INTO role_permissions (role_id, permission_key) VALUES (?, ?)").run(role.id, permission);
-      });
+      if (!existed || refreshDefaultPermissions) {
+        this.db.prepare("DELETE FROM role_permissions WHERE role_id = ?").run(role.id);
+        role.permissions.forEach((permission) => {
+          this.db.prepare("INSERT OR IGNORE INTO role_permissions (role_id, permission_key) VALUES (?, ?)").run(role.id, permission);
+        });
+      }
     });
+    if (refreshDefaultPermissions) this.setSetting("role_defaults_version", roleDefaultsVersion);
 
     Object.entries(permissionLabels).forEach(([key, label]) => {
       this.db.prepare("INSERT OR REPLACE INTO permissions (key, label) VALUES (?, ?)").run(key, label);
@@ -2548,7 +3065,7 @@ export class LocalDatabase {
     return this.db
       .prepare(
         `SELECT id, company_id as companyId, name, document, phone, whatsapp, address, notes,
-          credit_limit as creditLimit, balance, lgpd_accepted as lgpdAccepted, active,
+          credit_limit as creditLimit, balance, lgpd_accepted as lgpdAccepted, lgpd_accepted_at as lgpdAcceptedAt, active,
           last_purchase_at as lastPurchaseAt, updated_at as updatedAt, sync_status as syncStatus
         FROM customers WHERE id = ?`
       )
@@ -2607,37 +3124,83 @@ export class LocalDatabase {
   }
 
   private createReceiptHtml(sale: Sale): string {
+    const company = this.getCompany();
+    const widthMm = this.getSetting("receipt_width_mm") === "58" ? 58 : 80;
+    const footer = this.getSetting("receipt_footer_message") || "Obrigado pela preferencia.";
+    const escape = (value: unknown) =>
+      String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    const money = (value: number) => `R$ ${roundMoney(value).toFixed(2).replace(".", ",")}`;
+    const paymentLabels: Record<PaymentMethod, string> = {
+      cash: "Dinheiro",
+      pix: "Pix",
+      credit: "Credito",
+      debit: "Debito",
+      store_credit: "Fiado"
+    };
     const rows = sale.items
-      .map((item) => `<tr><td>${item.quantity}x ${item.productName}</td><td>R$ ${item.total.toFixed(2)}</td></tr>`)
+      .map(
+        (item) => `<tr>
+          <td>
+            <strong>${escape(item.productName)}</strong>
+            <span>${item.quantity} ${escape("UN")} x ${money(item.unitPrice)}${item.discount ? ` - desc. ${money(item.discount)}` : ""}</span>
+          </td>
+          <td>${money(item.total)}</td>
+        </tr>`
+      )
       .join("");
     const payments = sale.payments
-      .map((payment) => `<div>${payment.method.toUpperCase()}: R$ ${payment.amount.toFixed(2)}</div>`)
+      .map((payment) => `<div class="line"><span>${paymentLabels[payment.method] ?? payment.method}</span><strong>${money(payment.amount)}</strong></div>${payment.change ? `<div class="line muted"><span>Troco</span><strong>${money(payment.change)}</strong></div>` : ""}`)
       .join("");
+    const address = [company.address, company.city, company.state, company.zipCode].filter(Boolean).join(" - ");
     return `<!doctype html>
       <html lang="pt-BR">
         <head>
           <meta charset="utf-8" />
           <title>Comprovante ${sale.number}</title>
           <style>
-            body { font-family: Arial, sans-serif; width: 280px; margin: 0; padding: 16px; color: #111827; }
-            h1 { font-size: 18px; margin: 0 0 8px; }
-            table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-            td { padding: 4px 0; border-bottom: 1px dashed #D1D5DB; font-size: 12px; }
-            .total { font-size: 18px; font-weight: 700; margin-top: 12px; }
-            .muted { color: #6B7280; font-size: 11px; }
+            @page { size: ${widthMm}mm auto; margin: 0; }
+            * { box-sizing: border-box; }
+            body { font-family: "Arial", "Helvetica", sans-serif; width: ${widthMm}mm; margin: 0; padding: ${widthMm === 58 ? 10 : 14}px; color: #111827; font-size: ${widthMm === 58 ? 11 : 12}px; }
+            h1 { font-size: ${widthMm === 58 ? 15 : 18}px; margin: 0; text-align: center; letter-spacing: 0; }
+            .center { text-align: center; }
+            .muted { color: #4B5563; font-size: ${widthMm === 58 ? 10 : 11}px; }
+            .sep { border-top: 1px dashed #9CA3AF; margin: 10px 0; }
+            .line { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+            table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+            td { padding: 6px 0; border-bottom: 1px dashed #D1D5DB; vertical-align: top; }
+            td:first-child { width: 68%; }
+            td:last-child { text-align: right; font-weight: 700; }
+            td span { display: block; margin-top: 2px; color: #4B5563; font-size: ${widthMm === 58 ? 10 : 11}px; }
+            .total { border: 1px solid #111827; padding: 8px; margin-top: 8px; text-align: center; }
+            .total strong { display: block; font-size: ${widthMm === 58 ? 19 : 24}px; margin-top: 2px; }
+            .nonFiscal { margin-top: 10px; text-align: center; font-weight: 800; letter-spacing: 0; }
           </style>
         </head>
         <body>
-          <h1>NexPDV Store</h1>
-          <div class="muted">${sale.number}</div>
-          <div class="muted">${new Date(sale.createdAt).toLocaleString("pt-BR")}</div>
+          <h1>${escape(company.tradeName || company.name || "NexPDV Store")}</h1>
+          ${company.document ? `<div class="center muted">CNPJ/CPF: ${escape(company.document)}</div>` : ""}
+          ${address ? `<div class="center muted">${escape(address)}</div>` : ""}
+          ${company.phone || company.whatsapp ? `<div class="center muted">Tel: ${escape(company.phone || company.whatsapp)}</div>` : ""}
+          <div class="sep"></div>
+          <div class="line"><span>Comprovante</span><strong>${escape(sale.number)}</strong></div>
+          <div class="line"><span>Data/hora</span><strong>${new Date(sale.createdAt).toLocaleString("pt-BR")}</strong></div>
+          <div class="line"><span>Operador</span><strong>${escape(sale.operatorName)}</strong></div>
+          <div class="line"><span>Cliente</span><strong>${escape(sale.customerName || "Consumidor")}</strong></div>
+          <div class="sep"></div>
           <table>${rows}</table>
-          <div>Subtotal: R$ ${sale.subtotal.toFixed(2)}</div>
-          <div>Desconto: R$ ${sale.discount.toFixed(2)}</div>
-          <div class="total">Total: R$ ${sale.total.toFixed(2)}</div>
-          <hr />
+          <div class="line"><span>Subtotal</span><strong>${money(sale.subtotal)}</strong></div>
+          <div class="line"><span>Desconto</span><strong>${money(sale.discount)}</strong></div>
+          <div class="total"><span>Total</span><strong>${money(sale.total)}</strong></div>
+          <div class="sep"></div>
           ${payments}
-          <p class="muted">Obrigado pela preferencia.</p>
+          ${sale.notes ? `<div class="sep"></div><div class="muted">Obs.: ${escape(sale.notes)}</div>` : ""}
+          <div class="nonFiscal">COMPROVANTE NAO FISCAL</div>
+          <p class="center muted">${escape(footer)}</p>
+          <p class="center muted">NexPDV</p>
         </body>
       </html>`;
   }

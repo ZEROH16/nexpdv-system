@@ -1,8 +1,8 @@
-import { Building2, CheckCircle2, ClipboardCheck, History, Shield, Users, XCircle } from "lucide-react";
+import { Building2, CheckCircle2, ClipboardCheck, Copy, History, RotateCcw, Shield, Users, XCircle } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/Button";
 import { useAsync } from "@/hooks/useAsync";
-import { desktopApi, type SaveUserInput, type SecurityState } from "@/services/desktopApi";
+import { desktopApi, type SaveRoleInput, type SaveUserInput, type SecurityState } from "@/services/desktopApi";
 
 type TabId = "employees" | "roles" | "sectors" | "approvals" | "audit";
 
@@ -78,22 +78,21 @@ const StatusPill = ({ active }: { active: boolean }) => (
 export const Management = () => {
   const [tab, setTab] = useState<TabId>("employees");
   const [userModalOpen, setUserModalOpen] = useState(false);
-  const [userForm, setUserForm] = useState<SaveUserInput>({ name: "", username: "", email: "", phone: "", roleId: "role_cashier", sector: "Caixa", pin: "", password: "", active: true, notes: "" });
+  const [userForm, setUserForm] = useState<SaveUserInput>({ name: "", username: "", email: "", phone: "", roleId: "role_cashier", sector: "Caixa", pin: "", password: "", active: true, notes: "", permissionOverrides: [] });
+  const [roleModalOpen, setRoleModalOpen] = useState(false);
+  const [roleForm, setRoleForm] = useState<SaveRoleInput>({ name: "", level: 30, active: true, permissions: [] });
   const [userMessage, setUserMessage] = useState<string>();
   const { data: systemState, refresh } = useAsync(() => desktopApi.system.state(), []);
   const { data: auditLog } = useAsync(() => desktopApi.system.audit(), [tab]);
   const { data: security, refresh: refreshSecurity } = useAsync(() => desktopApi.system.security(), []);
   const permissionLabels = Object.fromEntries((security?.permissions ?? []).map((permission) => [permission.key, permission.label]));
   const employees = security?.users ?? fallbackEmployees;
+  const permissionOptions = security?.permissions ?? [];
   const permissions = security?.permissions.map((permission) => permission.label) ?? fallbackPermissions;
-  const roles = security?.roles.map((role) => ({
-    name: role.name,
-    permissions: role.permissions.map((permission) => permissionLabels[permission] ?? permission)
-  })) ?? fallbackRoles;
   const sectors = security?.sectors ?? fallbackSectors;
   const getEmployeeRole = (employee: { role?: string; roleName?: string }) => employee.roleName ?? employee.role ?? "-";
   const openNewUser = () => {
-    setUserForm({ name: "", username: "", email: "", phone: "", roleId: "role_cashier", sector: "Caixa", pin: "", password: "", active: true, notes: "" });
+    setUserForm({ name: "", username: "", email: "", phone: "", roleId: "role_cashier", sector: "Caixa", pin: "", password: "", active: true, notes: "", permissionOverrides: [] });
     setUserMessage(undefined);
     setUserModalOpen(true);
   };
@@ -109,7 +108,11 @@ export const Management = () => {
       pin: "",
       password: "",
       active: user.active,
-      notes: user.notes ?? ""
+      notes: user.notes ?? "",
+      permissionOverrides: [
+        ...(user.addedPermissions ?? []).map((permission) => ({ permission, effect: "allow" as const })),
+        ...(user.removedPermissions ?? []).map((permission) => ({ permission, effect: "deny" as const }))
+      ]
     });
     setUserMessage(undefined);
     setUserModalOpen(true);
@@ -127,6 +130,57 @@ export const Management = () => {
   const toggleUser = async (user: SecurityState["users"][number]) => {
     await desktopApi.auth.setUserActive({ userId: user.id, active: !user.active });
     refreshSecurity();
+  };
+  const openNewRole = () => {
+    setRoleForm({ name: "", level: 30, active: true, permissions: [] });
+    setUserMessage(undefined);
+    setRoleModalOpen(true);
+  };
+  const openEditRole = (role: SecurityState["roles"][number]) => {
+    setRoleForm({ id: role.id, name: role.name, code: role.code, level: role.level, active: role.active, permissions: role.permissions });
+    setUserMessage(undefined);
+    setRoleModalOpen(true);
+  };
+  const saveRole = async () => {
+    try {
+      await desktopApi.auth.saveRole(roleForm);
+      setRoleModalOpen(false);
+      setUserMessage("Cargo salvo.");
+      refreshSecurity();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Nao foi possivel salvar o cargo.");
+    }
+  };
+  const duplicateRole = async (roleId: string) => {
+    try {
+      await desktopApi.auth.duplicateRole(roleId);
+      setUserMessage("Cargo duplicado.");
+      refreshSecurity();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Nao foi possivel duplicar o cargo.");
+    }
+  };
+  const toggleRole = async (role: SecurityState["roles"][number]) => {
+    try {
+      await desktopApi.auth.setRoleActive({ roleId: role.id, active: !role.active });
+      refreshSecurity();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Nao foi possivel alterar o cargo.");
+    }
+  };
+  const resetRole = async (roleId: string) => {
+    try {
+      await desktopApi.auth.resetRoleDefaults(roleId);
+      setUserMessage("Permissoes padrao restauradas.");
+      refreshSecurity();
+    } catch (error) {
+      setUserMessage(error instanceof Error ? error.message : "Nao foi possivel restaurar o padrao.");
+    }
+  };
+  const setUserOverride = (permission: string, effect?: "allow" | "deny") => {
+    const next = (userForm.permissionOverrides ?? []).filter((item) => item.permission !== permission);
+    if (effect) next.push({ permission, effect });
+    setUserForm({ ...userForm, permissionOverrides: next });
   };
 
   return (
@@ -218,22 +272,44 @@ export const Management = () => {
       ) : null}
 
       {tab === "roles" ? (
-        <section className="grid grid-cols-2 gap-4">
-          {roles.map((role) => (
-            <article key={role.name} className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel dark:border-slate-800 dark:bg-slate-900">
-              <h2 className="text-lg font-black">{role.name}</h2>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {permissions.map((permission) => {
-                  const allowed = role.permissions.includes(permission);
-                  return (
-                    <span key={permission} className={`rounded-md px-2 py-1 text-xs font-bold ${allowed ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-800"}`}>
-                      {permission}
-                    </span>
-                  );
-                })}
-              </div>
-            </article>
-          ))}
+        <section className="space-y-4">
+          <div className="flex justify-end">
+            <Button onClick={openNewRole}>Novo cargo</Button>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {(security?.roles ?? []).map((role) => (
+              <article key={role.id} className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel dark:border-slate-800 dark:bg-slate-900">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-black">{role.name}</h2>
+                    <div className="mt-1 text-xs font-semibold text-slate-500">Nivel {role.level} - {role.active ? "Ativo" : "Inativo"}</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button className="h-9 px-3" variant="secondary" onClick={() => openEditRole(role)}>Editar</Button>
+                    <Button className="h-9 px-3" variant="ghost" onClick={() => duplicateRole(role.id)}><Copy size={15} /></Button>
+                    <Button className="h-9 px-3" variant="ghost" onClick={() => resetRole(role.id)}><RotateCcw size={15} /></Button>
+                    <Button className="h-9 px-3" variant="ghost" onClick={() => toggleRole(role)}>{role.active ? "Inativar" : "Ativar"}</Button>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {permissionOptions.map((permission) => {
+                    const allowed = role.permissions.includes(permission.key);
+                    return (
+                      <span key={permission.key} className={`rounded-md px-2 py-1 text-xs font-bold ${allowed ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-800"}`}>
+                        {permission.label}
+                      </span>
+                    );
+                  })}
+                </div>
+              </article>
+            ))}
+            {!security?.roles?.length ? fallbackRoles.map((role) => (
+              <article key={role.name} className="rounded-lg border border-slate-200 bg-white p-5 shadow-panel dark:border-slate-800 dark:bg-slate-900">
+                <h2 className="text-lg font-black">{role.name}</h2>
+                <div className="mt-4 flex flex-wrap gap-2">{permissions.map((permission) => <span key={permission} className={`rounded-md px-2 py-1 text-xs font-bold ${role.permissions.includes(permission) ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" : "bg-slate-100 text-slate-400 dark:bg-slate-800"}`}>{permission}</span>)}</div>
+              </article>
+            )) : null}
+          </div>
         </section>
       ) : null}
 
@@ -299,6 +375,51 @@ export const Management = () => {
         </section>
       ) : null}
 
+      {roleModalOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-8">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg bg-white p-6 shadow-2xl dark:bg-slate-950">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black">{roleForm.id ? "Editar cargo" : "Novo cargo"}</h2>
+                <p className="text-sm text-slate-500">Permissoes efetivas sao validadas tambem no banco local.</p>
+              </div>
+              <button className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-900" onClick={() => setRoleModalOpen(false)}>
+                <XCircle size={20} />
+              </button>
+            </div>
+            <div className="mt-5 grid grid-cols-[1fr_120px_120px] gap-3">
+              <label className="text-sm font-semibold">Nome do cargo<input className="field mt-1 w-full" value={roleForm.name} onChange={(event) => setRoleForm({ ...roleForm, name: event.target.value })} /></label>
+              <label className="text-sm font-semibold">Nivel<input className="field mt-1 w-full" type="number" value={roleForm.level ?? 30} onChange={(event) => setRoleForm({ ...roleForm, level: Number(event.target.value) })} /></label>
+              <label className="mt-7 flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={roleForm.active ?? true} onChange={(event) => setRoleForm({ ...roleForm, active: event.target.checked })} />Ativo</label>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              {permissionOptions.map((permission) => {
+                const checked = roleForm.permissions.includes(permission.key);
+                return (
+                  <label key={permission.key} className={`flex items-center gap-3 rounded-lg border p-3 text-sm font-semibold ${checked ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-200" : "border-slate-200 dark:border-slate-800"}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) => {
+                        const permissions = event.target.checked
+                          ? [...roleForm.permissions, permission.key]
+                          : roleForm.permissions.filter((item) => item !== permission.key);
+                        setRoleForm({ ...roleForm, permissions });
+                      }}
+                    />
+                    {permission.label}
+                  </label>
+                );
+              })}
+            </div>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => setRoleModalOpen(false)}>Cancelar</Button>
+              <Button disabled={!roleForm.name.trim()} onClick={() => void saveRole()}>Salvar cargo</Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {userModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-8">
           <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-lg bg-white p-6 shadow-2xl dark:bg-slate-950">
@@ -335,6 +456,27 @@ export const Management = () => {
                 </div>
               </div>
             ) : null}
+            <div className="mt-5 rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+              <div className="text-sm font-bold">Permissoes por usuario</div>
+              <p className="mt-1 text-xs text-slate-500">Use apenas para excecoes. Verde adiciona permissao, vermelho remove permissao herdada.</p>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {permissionOptions.map((permission) => {
+                  const inherited = security?.roles.find((role) => role.id === userForm.roleId)?.permissions.includes(permission.key) ?? false;
+                  const override = userForm.permissionOverrides?.find((item) => item.permission === permission.key)?.effect;
+                  return (
+                    <div key={permission.key} className="rounded-lg bg-slate-50 p-3 text-xs dark:bg-slate-900">
+                      <div className="font-bold">{permission.label}</div>
+                      <div className="mt-2 grid grid-cols-3 gap-1">
+                        <button className={`rounded-md px-2 py-1 font-bold ${!override ? "bg-slate-800 text-white dark:bg-white dark:text-ink" : "bg-slate-200 dark:bg-slate-800"}`} onClick={() => setUserOverride(permission.key, undefined)}>Herdar</button>
+                        <button className={`rounded-md px-2 py-1 font-bold ${override === "allow" ? "bg-emerald-600 text-white" : "bg-slate-200 dark:bg-slate-800"}`} onClick={() => setUserOverride(permission.key, "allow")}>Adicionar</button>
+                        <button className={`rounded-md px-2 py-1 font-bold ${override === "deny" ? "bg-red-600 text-white" : "bg-slate-200 dark:bg-slate-800"}`} onClick={() => setUserOverride(permission.key, "deny")}>Remover</button>
+                      </div>
+                      <div className="mt-2 text-slate-500">{override === "allow" ? "Adicionada manualmente" : override === "deny" ? "Removida manualmente" : inherited ? "Herdada do cargo" : "Nao herdada"}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
             {userMessage ? <div className="mt-4 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">{userMessage}</div> : null}
             <div className="mt-6 flex justify-end gap-3">
               <Button variant="ghost" onClick={() => setUserModalOpen(false)}>Cancelar</Button>

@@ -2,6 +2,7 @@ node_modules/
 .npm-cache/
 .tmp-main-check/
 .tmp-*/
+.nexpdv-user-data/
 *.tsbuildinfo
 dist/
 build/

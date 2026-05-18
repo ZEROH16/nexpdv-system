@@ -6,6 +6,17 @@ import { registerIpcHandlers } from "./ipc";
 import { SyncEngine } from "./syncEngine";
 
 const bootstrapLogPath = path.join(process.cwd(), "electron-main.log");
+const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+
+if (isDev) {
+  app.setPath("userData", path.join(process.cwd(), ".nexpdv-user-data"));
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  app.commandLine.appendSwitch("disable-gpu-sandbox");
+  app.commandLine.appendSwitch("disable-software-rasterizer");
+  app.commandLine.appendSwitch("in-process-gpu");
+}
 
 const stringifyError = (error: unknown): string => {
   if (error instanceof Error) return `${error.name}: ${error.message}\n${error.stack ?? ""}`;

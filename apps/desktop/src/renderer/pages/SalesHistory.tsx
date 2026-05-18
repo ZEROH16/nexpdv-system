@@ -33,7 +33,7 @@ export const SalesHistory = () => {
   );
   const { data: license } = useAsync(() => desktopApi.license.check(), []);
   const { data: fiscalConfig } = useAsync(() => desktopApi.fiscal.getFiscalConfig(), []);
-  const fiscalVisible = Boolean(license?.fiscalEnabled && fiscalConfig?.enabled);
+  const fiscalVisible = Boolean((license?.features?.fiscal ?? license?.fiscalEnabled) && fiscalConfig?.enabled);
 
   const cancel = async () => {
     if (!cancelTarget) return;

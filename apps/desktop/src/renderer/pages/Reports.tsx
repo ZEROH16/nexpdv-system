@@ -13,16 +13,26 @@ export const Reports = () => {
     [period.start, period.end]
   );
   const { data: lowStock } = useAsync(() => desktopApi.products.list({ lowStock: true, pageSize: 200 }), []);
+  const { data: openCustomers } = useAsync(() => desktopApi.customers.openSummary(), []);
 
   const summary = useMemo(() => {
     const completed = sales?.filter((sale) => sale.status === "completed") ?? [];
     const total = completed.reduce((sum, sale) => sum + sale.total, 0);
     const profit = completed.reduce((sum, sale) => sum + sale.profit, 0);
+    const averageTicket = completed.length ? total / completed.length : 0;
     const byPayment = completed.flatMap((sale) => sale.payments).reduce<Record<string, number>>((acc, payment) => {
       acc[payment.method] = (acc[payment.method] ?? 0) + payment.amount;
       return acc;
     }, {});
-    return { count: completed.length, total, profit, byPayment };
+    const topProducts = completed
+      .flatMap((sale) => sale.items)
+      .reduce<Record<string, { name: string; quantity: number; revenue: number }>>((acc, item) => {
+        acc[item.productName] = acc[item.productName] ?? { name: item.productName, quantity: 0, revenue: 0 };
+        acc[item.productName].quantity += item.quantity;
+        acc[item.productName].revenue += item.total;
+        return acc;
+      }, {});
+    return { count: completed.length, total, profit, averageTicket, byPayment, topProducts: Object.values(topProducts).sort((a, b) => b.quantity - a.quantity).slice(0, 8) };
   }, [sales]);
 
   const exportCsv = () => {
@@ -48,9 +58,14 @@ export const Reports = () => {
         <StatCard label="Vendas por periodo" value={String(summary.count)} />
         <StatCard label="Faturamento" value={formatCurrency(summary.total)} tone="good" />
         <StatCard label="Lucro estimado" value={formatCurrency(summary.profit)} tone="good" />
-        <StatCard label="Estoque baixo" value={String(lowStock?.total ?? 0)} tone={(lowStock?.total ?? 0) ? "warn" : "good"} />
+        <StatCard label="Ticket medio" value={formatCurrency(summary.averageTicket)} />
       </div>
-      <div className="grid grid-cols-2 gap-6">
+      <div className="grid grid-cols-3 gap-4">
+        <StatCard label="Estoque baixo" value={String(lowStock?.total ?? 0)} tone={(lowStock?.total ?? 0) ? "warn" : "good"} />
+        <StatCard label="Clientes em aberto" value={String(openCustomers?.openCustomers.length ?? 0)} tone={(openCustomers?.openCustomers.length ?? 0) ? "warn" : "good"} />
+        <StatCard label="Total a receber" value={formatCurrency(openCustomers?.totalReceivable ?? 0)} />
+      </div>
+      <div className="grid grid-cols-3 gap-6">
         <section className="panel p-5">
           <h2 className="text-lg font-black">Vendas por pagamento</h2>
           <div className="mt-4 space-y-3">
@@ -69,6 +84,17 @@ export const Reports = () => {
               <div key={product.id} className="flex items-center justify-between rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                 <span className="text-sm font-semibold">{product.name}</span>
                 <strong>{product.stock}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="panel p-5">
+          <h2 className="text-lg font-black">Produtos mais vendidos</h2>
+          <div className="mt-4 space-y-3">
+            {summary.topProducts.map((product) => (
+              <div key={product.name} className="flex items-center justify-between rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                <span className="text-sm font-semibold">{product.name}</span>
+                <strong>{product.quantity}</strong>
               </div>
             ))}
           </div>

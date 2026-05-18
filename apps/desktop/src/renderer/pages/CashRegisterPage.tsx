@@ -29,9 +29,13 @@ export const CashRegisterPage = () => {
   const difference = countedAmount - (summary?.expectedAmount ?? 0);
 
   const open = async () => {
-    await desktopApi.cash.open(openingAmount);
-    setMessage("Caixa aberto.");
-    refresh();
+    try {
+      await desktopApi.cash.open(openingAmount);
+      setMessage("Caixa aberto.");
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel abrir o caixa.");
+    }
   };
 
   const openMovement = (type: MovementType) => {
@@ -40,11 +44,15 @@ export const CashRegisterPage = () => {
   };
 
   const addMovement = async () => {
-    await desktopApi.cash.movement(movement);
-    setMovementOpen(false);
-    setMovement({ type: "income", description: "", amount: 0 });
-    setMessage(`${movementLabels[movement.type]} registrada.`);
-    refresh();
+    try {
+      await desktopApi.cash.movement(movement);
+      setMovementOpen(false);
+      setMovement({ type: "income", description: "", amount: 0 });
+      setMessage(`${movementLabels[movement.type]} registrada.`);
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel registrar a movimentacao.");
+    }
   };
 
   const startClosing = () => {
@@ -55,10 +63,14 @@ export const CashRegisterPage = () => {
 
   const close = async () => {
     if (!cashRegister) return;
-    const closed = await desktopApi.cash.close({ cashRegisterId: cashRegister.id, countedAmount, closingNotes });
-    setClosingOpen(false);
-    setMessage(`Caixa fechado. Diferenca: ${formatCurrency(closed.difference ?? 0)}${closingNotes ? " com observacao registrada." : "."}`);
-    refresh();
+    try {
+      const closed = await desktopApi.cash.close({ cashRegisterId: cashRegister.id, countedAmount, closingNotes });
+      setClosingOpen(false);
+      setMessage(`Caixa fechado. Diferenca: ${formatCurrency(closed.difference ?? 0)}${closingNotes ? " com observacao registrada." : "."}`);
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel fechar o caixa.");
+    }
   };
 
   if (loading) {

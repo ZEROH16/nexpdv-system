@@ -7,11 +7,14 @@ import type {
   FiscalDocument,
   FiscalStatus,
   License,
+  LicenseCheckResult,
   PaymentMethod,
   PixCharge,
   PixChargeStatus,
   PixConfig,
   Product,
+  ProductStockMovement,
+  ProductStockMovementType,
   Sale
 } from "@nexpdv/shared";
 
@@ -24,6 +27,8 @@ export interface CartInput {
   customerId?: string;
   notes?: string;
   discount?: number;
+  highDiscountAuthorizationToken?: string;
+  storeCreditAuthorizationToken?: string;
   items: Array<{ productId?: string; quantity: number; discount?: number; description?: string; unitPrice?: number; cost?: number; category?: string; notes?: string; custom?: boolean }>;
   payments: Array<{ method: PaymentMethod; amount: number }>;
 }
@@ -55,8 +60,12 @@ export interface SystemState {
   allowSalesWithoutCashRegister: boolean;
   usePermissions: boolean;
   locationControl: boolean;
+  blockNegativeStock: boolean;
   automaticBackupEnabled: boolean;
   backupPath: string;
+  receiptWidthMm: 58 | 80;
+  receiptFooterMessage: string;
+  receiptAutoPrint: boolean;
   company: Partial<Company>;
   license?: License & {
     cloudEnabled?: boolean;
@@ -94,8 +103,8 @@ export interface AuditEntry {
 }
 
 export interface SecurityState {
-  users: Array<{ id: string; name: string; username: string; email?: string; phone?: string; role: string; roleId?: string; roleName: string; sector: string; active: boolean; notes?: string; lastAccessAt?: string; permissions?: string[] }>;
-  roles: Array<{ id: string; name: string; code: string; level: number; permissions: string[] }>;
+  users: Array<{ id: string; name: string; username: string; email?: string; phone?: string; role: string; roleId?: string; roleName: string; sector: string; active: boolean; notes?: string; lastAccessAt?: string; permissions?: string[]; inheritedPermissions?: string[]; addedPermissions?: string[]; removedPermissions?: string[] }>;
+  roles: Array<{ id: string; name: string; code: string; level: number; active: boolean; permissions: string[] }>;
   permissions: Array<{ key: string; label: string }>;
   sectors: Array<{ name: string; description: string; people: number }>;
 }
@@ -144,6 +153,16 @@ export interface SaveUserInput {
   password?: string;
   active?: boolean;
   notes?: string;
+  permissionOverrides?: Array<{ permission: string; effect: "allow" | "deny" }>;
+}
+
+export interface SaveRoleInput {
+  id?: string;
+  name: string;
+  code?: string;
+  level?: number;
+  active?: boolean;
+  permissions: string[];
 }
 
 export interface BackupState {
@@ -155,9 +174,12 @@ export interface BackupState {
 export const desktopApi = {
   dashboard: () => window.nexpdv.dashboard.get<DashboardMetrics>(),
   products: {
-    list: (query?: { search?: string; lowStock?: boolean; page?: number; pageSize?: number }) =>
+    list: (query?: { search?: string; lowStock?: boolean; active?: "active" | "inactive" | "all"; categoryId?: string; expiringDays?: number; page?: number; pageSize?: number }) =>
       window.nexpdv.products.list<ProductListResponse>(query),
     save: (product: Partial<Product>) => window.nexpdv.products.save<Product>(product),
+    stockMovement: (input: { productId: string; type: ProductStockMovementType; quantity: number; reason?: string }) =>
+      window.nexpdv.products.stockMovement<Product>(input),
+    stockMovements: (productId?: string) => window.nexpdv.products.stockMovements<ProductStockMovement[]>(productId),
     categories: () => window.nexpdv.products.categories<Array<{ id: string; name: string; color: string }>>(),
     importCsv: (csv: string) => window.nexpdv.products.importCsv<{ imported: number }>(csv)
   },
@@ -189,20 +211,7 @@ export const desktopApi = {
     onStatus: window.nexpdv.sync.onStatus
   },
   license: {
-    check: () => window.nexpdv.license.check<{
-      valid: boolean;
-      key: string;
-      status: string;
-      demoMode: boolean;
-      validUntil: string;
-      cloudEnabled: boolean;
-      fiscalEnabled: boolean;
-      pixEnabled: boolean;
-      mobileEnabled: boolean;
-      intelligenceEnabled: boolean;
-      ownerEmail?: string;
-      message: string;
-    }>()
+    check: () => window.nexpdv.license.check<LicenseCheckResult>()
   },
   auth: {
     state: () => window.nexpdv.auth.state<AuthState>(),
@@ -212,18 +221,22 @@ export const desktopApi = {
     unlock: (input: { login?: string; password?: string; pin?: string }) => window.nexpdv.auth.unlock<AuthState>(input),
     switchOperator: (input: { login: string; password?: string; pin?: string; rememberOperator?: boolean }) => window.nexpdv.auth.switchOperator<AuthState>(input),
     authorize: (input: { login?: string; password?: string; pin?: string; permission?: string; requireManager?: boolean }) =>
-      window.nexpdv.auth.authorize<{ ok: boolean; user?: SecurityState["users"][number]; message: string }>(input),
+      window.nexpdv.auth.authorize<{ ok: boolean; user?: SecurityState["users"][number]; message: string; token?: string }>(input),
     securitySettings: () => window.nexpdv.auth.securitySettings<SecuritySettings>(),
     saveSecuritySettings: (input: Partial<SecuritySettings>) => window.nexpdv.auth.saveSecuritySettings<SecuritySettings>(input),
     saveUser: (input: SaveUserInput) => window.nexpdv.auth.saveUser<SecurityState["users"][number]>(input),
     setUserActive: (input: { userId: string; active: boolean }) => window.nexpdv.auth.setUserActive<SecurityState["users"][number]>(input),
     resetPassword: (input: { userId: string; password: string }) => window.nexpdv.auth.resetPassword<SecurityState["users"][number]>(input),
-    resetPin: (input: { userId: string; pin: string }) => window.nexpdv.auth.resetPin<SecurityState["users"][number]>(input)
+    resetPin: (input: { userId: string; pin: string }) => window.nexpdv.auth.resetPin<SecurityState["users"][number]>(input),
+    saveRole: (input: SaveRoleInput) => window.nexpdv.auth.saveRole<SecurityState["roles"][number]>(input),
+    duplicateRole: (roleId: string) => window.nexpdv.auth.duplicateRole<SecurityState["roles"][number]>(roleId),
+    setRoleActive: (input: { roleId: string; active: boolean }) => window.nexpdv.auth.setRoleActive<SecurityState["roles"][number]>(input),
+    resetRoleDefaults: (roleId: string) => window.nexpdv.auth.resetRoleDefaults<SecurityState["roles"][number]>(roleId)
   },
   system: {
     state: () => window.nexpdv.system.state<SystemState>(),
     activate: (input: { ownerEmail: string; licenseKey: string; companyName: string }) => window.nexpdv.system.activate<SystemState>(input),
-    settings: (input: { usePermissions?: boolean; locationControl?: boolean; allowSalesWithoutCashRegister?: boolean; automaticBackupEnabled?: boolean; backupPath?: string }) => window.nexpdv.system.settings<SystemState>(input),
+    settings: (input: { usePermissions?: boolean; locationControl?: boolean; allowSalesWithoutCashRegister?: boolean; blockNegativeStock?: boolean; automaticBackupEnabled?: boolean; backupPath?: string; receiptWidthMm?: 58 | 80; receiptFooterMessage?: string; receiptAutoPrint?: boolean }) => window.nexpdv.system.settings<SystemState>(input),
     cloud: (input: { cloudKey: string; ownerEmail: string }) => window.nexpdv.system.cloud<SystemState>(input),
     company: (input: Partial<Company>) => window.nexpdv.system.company<Partial<Company>>(input),
     manager: (password: string) => window.nexpdv.system.manager<{ ok: boolean; role?: "manager" | "admin" | "owner"; message: string }>(password),

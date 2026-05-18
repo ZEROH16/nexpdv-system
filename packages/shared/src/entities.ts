@@ -4,8 +4,11 @@ export type SyncStatus = "pending" | "synced" | "failed" | "conflict";
 export type SaleStatus = "completed" | "cancelled";
 export type PaymentMethod = "cash" | "pix" | "credit" | "debit" | "store_credit";
 export type CashMovementType = "opening" | "income" | "expense" | "withdrawal" | "closing";
+export type ProductStockMovementType = "entry" | "exit" | "adjustment" | "loss" | "expiration";
 export type UserRole = "owner" | "admin" | "manager" | "stockist" | "cashier";
 export type LicenseStatus = "active" | "trial" | "expired" | "blocked";
+export type LicensePlan = "OFFLINE" | "CLOUD" | "PRO";
+export type LicenseFeature = "pix" | "fiscal" | "cloud" | "mobile" | "intelligence";
 export type PixConfigMode = "manual" | "static_qr" | "dynamic_qr";
 export type PixKeyType = "cpf" | "cnpj" | "email" | "phone" | "random";
 export type PixChargeStatus = "waiting" | "paid" | "expired" | "cancelled";
@@ -80,6 +83,20 @@ export interface Product {
   syncStatus?: SyncStatus;
 }
 
+export interface ProductStockMovement {
+  id: Id;
+  companyId: Id;
+  productId: Id;
+  productName: string;
+  type: ProductStockMovementType;
+  quantity: number;
+  previousStock: number;
+  newStock: number;
+  reason?: string;
+  operatorName?: string;
+  createdAt: string;
+}
+
 export interface Customer {
   id: Id;
   companyId: Id;
@@ -92,6 +109,7 @@ export interface Customer {
   creditLimit: number;
   balance: number;
   lgpdAccepted?: boolean;
+  lgpdAcceptedAt?: string;
   active?: boolean;
   lastPurchaseAt?: string;
   updatedAt: string;
@@ -202,16 +220,53 @@ export interface License {
   id: Id;
   companyId: Id;
   key: string;
+  plan?: LicensePlan;
   status: LicenseStatus;
   validUntil: string;
   demoMode: boolean;
+  features?: LicenseFeatures;
   cloudEnabled?: boolean;
   fiscalEnabled?: boolean;
   pixEnabled?: boolean;
   mobileEnabled?: boolean;
   intelligenceEnabled?: boolean;
   ownerEmail?: string;
+  establishmentName?: string;
+  issuedAt?: string;
   activatedAt?: string;
+  lastValidatedAt?: string;
+  validationMode?: "local" | "online_pending" | "online";
+  signature?: string;
+}
+
+export type LicenseFeatures = Record<LicenseFeature, boolean>;
+
+export interface LicenseActivationInput {
+  ownerEmail: string;
+  licenseKey: string;
+  companyName: string;
+}
+
+export interface LicenseCheckResult {
+  valid: boolean;
+  key: string;
+  plan: LicensePlan | "NONE";
+  planLabel: string;
+  status: LicenseStatus | "missing" | "invalid";
+  demoMode: boolean;
+  validUntil: string;
+  features: LicenseFeatures;
+  cloudEnabled: boolean;
+  fiscalEnabled: boolean;
+  pixEnabled: boolean;
+  mobileEnabled: boolean;
+  intelligenceEnabled: boolean;
+  ownerEmail?: string;
+  establishmentName?: string;
+  expiresAt?: string;
+  lastValidatedAt?: string;
+  validationMode: "local" | "online_pending" | "online";
+  message: string;
 }
 
 export interface PixConfig {

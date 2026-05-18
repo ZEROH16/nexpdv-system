@@ -10,7 +10,7 @@
     "electron:validate": "node scripts/validate-electron-runtime.mjs",
     "dev:renderer": "node scripts/vite-dev.mjs",
     "dev:main": "node scripts/compile-main.mjs --watch",
-    "dev:electron": "wait-on tcp:5173 dist/main/main.cjs dist/main/preload.cjs dist/main/package.json && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron dist/main",
+    "dev:electron": "wait-on tcp:5173 dist/main/main.cjs dist/main/preload.cjs dist/main/package.json && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 ../../node_modules/.bin/electron dist/main",
     "build": "npm run build -w @nexpdv/shared && tsc -p tsconfig.json --noEmit && node scripts/vite-build.mjs && node scripts/compile-main.mjs",
     "lint": "eslint src --ext .ts,.tsx",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -19,7 +19,7 @@
   "dependencies": {
     "@nexpdv/shared": "0.1.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "electron": "^31.3.1",
+    "electron": "^42.1.0",
     "electron-builder": "^24.13.3",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",

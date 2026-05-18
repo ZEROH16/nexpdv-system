@@ -47,6 +47,7 @@ export const Layout = ({ children, authState, onAuthChanged }: { children: React
   const { data: systemState } = useAsync(() => desktopApi.system.state(), []);
   const sync = useSyncStatus();
   const cloudEnabled = systemState?.cloudEnabled ?? false;
+  const licensePlan = systemState?.license?.plan ?? "OFFLINE";
   const canManage = Boolean(authState?.user?.permissions?.includes("access_management"));
   const visibleNav = nav.filter((item) => item.id !== "management" || managementUnlocked || canManage);
   const posFocusActive = page === "pos" && focusMode;
@@ -119,6 +120,7 @@ export const Layout = ({ children, authState, onAuthChanged }: { children: React
           <div className="min-w-0">
             <div className="truncate text-sm font-black">{systemState?.company.tradeName ?? "NexPDV Store"}</div>
             <div className="truncate text-xs text-slate-500">{systemState?.company.document ?? "Backup local ativo"}</div>
+            <div className="mt-1 text-[11px] font-bold uppercase text-slate-500">Plano {licensePlan}</div>
           </div>
         </div>
         <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-900">

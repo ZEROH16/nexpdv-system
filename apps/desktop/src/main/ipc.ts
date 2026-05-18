@@ -1,13 +1,15 @@
 import { ipcMain } from "electron";
 import type { LocalDatabase } from "./localDatabase";
 import type { SyncEngine } from "./syncEngine";
-import { checkLocalLicense } from "./licenseService";
+import { assertLicensedModule, checkLocalLicense } from "./licenseService";
 import { printReceipt } from "./receiptPrinter";
 
 export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void => {
   ipcMain.handle("dashboard:get", () => db.getDashboard());
   ipcMain.handle("products:list", (_event, query) => db.listProducts(query));
   ipcMain.handle("products:save", (_event, product) => db.upsertProduct(product));
+  ipcMain.handle("products:stock-movement", (_event, input) => db.adjustProductStock(input));
+  ipcMain.handle("products:stock-movements", (_event, productId?: string) => db.listProductStockMovements(productId));
   ipcMain.handle("products:categories", () => db.listCategories());
   ipcMain.handle("products:importCsv", (_event, csv: string) => db.importProductsFromCsv(csv));
   ipcMain.handle("customers:list", (_event, search: string) => db.listCustomers(search));
@@ -28,7 +30,10 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("cash:movement", (_event, input) => db.addCashMovement(input.type, input.description, input.amount));
   ipcMain.handle("cash:close", (_event, input) => db.closeCashRegister(input));
   ipcMain.handle("sync:status", () => sync.getStatus());
-  ipcMain.handle("sync:flush", () => sync.flush());
+  ipcMain.handle("sync:flush", () => {
+    assertLicensedModule(db, "cloud");
+    return sync.flush();
+  });
   ipcMain.handle("license:check", () => checkLocalLicense(db));
   ipcMain.handle("auth:state", () => db.getAuthState());
   ipcMain.handle("auth:login", (_event, input) => db.login(input));
@@ -43,6 +48,10 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("auth:set-user-active", (_event, input) => db.setUserActive(input.userId, input.active));
   ipcMain.handle("auth:reset-password", (_event, input) => db.resetUserPassword(input.userId, input.password));
   ipcMain.handle("auth:reset-pin", (_event, input) => db.resetUserPin(input.userId, input.pin));
+  ipcMain.handle("auth:save-role", (_event, input) => db.saveRole(input));
+  ipcMain.handle("auth:duplicate-role", (_event, roleId: string) => db.duplicateRole(roleId));
+  ipcMain.handle("auth:set-role-active", (_event, input) => db.setRoleActive(input.roleId, input.active));
+  ipcMain.handle("auth:reset-role-defaults", (_event, roleId: string) => db.resetRoleDefaults(roleId));
   ipcMain.handle("system:state", () => db.getSystemState());
   ipcMain.handle("system:activate", (_event, input) => db.activateSystem(input));
   ipcMain.handle("system:settings", (_event, input) => db.updateSettings(input));

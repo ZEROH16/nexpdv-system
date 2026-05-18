@@ -2,6 +2,7 @@ import type { BrowserWindow } from "electron";
 import type { SyncQueueItem, SyncResult } from "@nexpdv/shared";
 import { SYNC_BATCH_SIZE } from "@nexpdv/shared";
 import type { LocalDatabase } from "./localDatabase";
+import { checkLocalLicense } from "./licenseService";
 
 export interface SyncState {
   online: boolean;
@@ -39,6 +40,12 @@ export class SyncEngine {
 
   async flush(window?: BrowserWindow): Promise<SyncState> {
     if (this.state.running) return this.getStatus();
+    const license = checkLocalLicense(this.db);
+    if (!license.cloudEnabled) {
+      this.state = { online: false, running: false, pending: this.db.getSyncQueue(10_000).length };
+      window?.webContents.send("sync:status", this.state);
+      return this.state;
+    }
     const queue = this.db.getSyncQueue(SYNC_BATCH_SIZE);
     this.state = { ...this.state, running: true, pending: queue.length, lastError: undefined };
     window?.webContents.send("sync:status", this.state);

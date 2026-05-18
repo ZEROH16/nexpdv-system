@@ -48,34 +48,46 @@ export const Customers = () => {
   };
 
   const save = async () => {
-    const saved = await desktopApi.customers.save(form);
-    setDrawerOpen(false);
-    setForm(emptyCustomer);
-    setMessage(`${saved.name} salvo.`);
-    refresh();
-    refreshOpenSummary();
+    try {
+      const saved = await desktopApi.customers.save(form);
+      setDrawerOpen(false);
+      setForm(emptyCustomer);
+      setMessage(`${saved.name} salvo.`);
+      refresh();
+      refreshOpenSummary();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar o cliente.");
+    }
   };
 
   const removeCustomer = async () => {
     if (!form.id) return;
     const confirmed = window.confirm("Deseja excluir/inativar este cliente? Clientes com vendas vinculadas serao apenas marcados como inativos.");
     if (!confirmed) return;
-    await desktopApi.customers.delete(form.id);
-    setDrawerOpen(false);
-    setForm(emptyCustomer);
-    setMessage("Cliente inativado.");
-    refresh();
-    refreshOpenSummary();
+    try {
+      await desktopApi.customers.delete(form.id);
+      setDrawerOpen(false);
+      setForm(emptyCustomer);
+      setMessage("Cliente inativado.");
+      refresh();
+      refreshOpenSummary();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel inativar o cliente.");
+    }
   };
 
   const registerPayment = async () => {
     if (!paymentCustomer || paymentAmount <= 0) return;
-    await desktopApi.customers.payment({ customerId: paymentCustomer.id, amount: paymentAmount });
-    setPaymentCustomer(undefined);
-    setPaymentAmount(0);
-    setMessage("Pagamento registrado.");
-    refresh();
-    refreshOpenSummary();
+    try {
+      await desktopApi.customers.payment({ customerId: paymentCustomer.id, amount: paymentAmount });
+      setPaymentCustomer(undefined);
+      setPaymentAmount(0);
+      setMessage("Pagamento registrado.");
+      refresh();
+      refreshOpenSummary();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel registrar o pagamento.");
+    }
   };
 
   return (
@@ -119,6 +131,7 @@ export const Customers = () => {
                   <td className="table-cell">{customer.whatsapp || customer.phone || "-"}</td>
                   <td className="table-cell">
                     <StatusBadge tone={customer.lgpdAccepted ? "green" : "amber"}>{customer.lgpdAccepted ? "Aceito" : "Pendente"}</StatusBadge>
+                    {customer.lgpdAcceptedAt ? <div className="mt-1 text-xs text-slate-500">{formatDateTime(customer.lgpdAcceptedAt)}</div> : null}
                   </td>
                   <td className="table-cell">{formatCurrency(customer.creditLimit)}</td>
                   <td className="table-cell font-bold">{formatCurrency(customer.balance)}</td>
@@ -230,9 +243,10 @@ export const Customers = () => {
                   <textarea className="field mt-1 h-20 w-full py-2" value={form.notes ?? ""} onChange={(event) => setForm({ ...form, notes: event.target.value })} />
                 </label>
                 <label className="flex items-start gap-3 rounded-lg border border-slate-200 p-3 text-sm font-semibold dark:border-slate-700">
-                  <input className="mt-1" type="checkbox" checked={form.lgpdAccepted ?? false} onChange={(event) => setForm({ ...form, lgpdAccepted: event.target.checked })} />
+                  <input className="mt-1" type="checkbox" checked={form.lgpdAccepted ?? false} onChange={(event) => setForm({ ...form, lgpdAccepted: event.target.checked, lgpdAcceptedAt: event.target.checked ? form.lgpdAcceptedAt ?? new Date().toISOString() : undefined })} />
                   Cliente autorizou o armazenamento dos dados para fins de cadastro, venda, fiado e comunicacao.
                 </label>
+                {form.lgpdAcceptedAt ? <div className="rounded-lg bg-emerald-50 p-3 text-sm font-semibold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">Aceite registrado em {formatDateTime(form.lgpdAcceptedAt)}</div> : null}
               </div>
             </div>
             <div className="flex flex-wrap justify-between gap-3 border-t border-slate-200 p-5 dark:border-slate-800">

@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld("nexpdv", {
   products: {
     list: (query: unknown) => invoke("products:list", query),
     save: (product: unknown) => invoke("products:save", product),
+    stockMovement: (input: unknown) => invoke("products:stock-movement", input),
+    stockMovements: (productId?: string) => invoke("products:stock-movements", productId),
     categories: () => invoke("products:categories"),
     importCsv: (csv: string) => invoke("products:importCsv", csv)
   },
@@ -58,7 +60,11 @@ contextBridge.exposeInMainWorld("nexpdv", {
     saveUser: (input: unknown) => invoke("auth:save-user", input),
     setUserActive: (input: unknown) => invoke("auth:set-user-active", input),
     resetPassword: (input: unknown) => invoke("auth:reset-password", input),
-    resetPin: (input: unknown) => invoke("auth:reset-pin", input)
+    resetPin: (input: unknown) => invoke("auth:reset-pin", input),
+    saveRole: (input: unknown) => invoke("auth:save-role", input),
+    duplicateRole: (roleId: string) => invoke("auth:duplicate-role", roleId),
+    setRoleActive: (input: unknown) => invoke("auth:set-role-active", input),
+    resetRoleDefaults: (roleId: string) => invoke("auth:reset-role-defaults", roleId)
   },
   system: {
     state: () => invoke("system:state"),

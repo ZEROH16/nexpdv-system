@@ -36,6 +36,7 @@ const pixStatusLabel = {
 export const Pos = () => {
   const barcodeRef = useRef<HTMLInputElement>(null);
   const discountRef = useRef<HTMLInputElement>(null);
+  const productSearchRef = useRef<HTMLInputElement>(null);
   const [barcode, setBarcode] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
@@ -54,8 +55,13 @@ export const Pos = () => {
   const [pendingDiscountPercent, setPendingDiscountPercent] = useState(0);
   const [operatorSwitchOpen, setOperatorSwitchOpen] = useState(false);
   const [operatorSwitchForm, setOperatorSwitchForm] = useState({ login: "", pin: "", password: "", mode: "pin" as "pin" | "password" });
+  const [creditAuthOpen, setCreditAuthOpen] = useState(false);
+  const [creditAuthForm, setCreditAuthForm] = useState({ login: "gerente", credential: "", mode: "pin" as "pin" | "password" });
+  const [creditAuthError, setCreditAuthError] = useState<string>();
   const [discountError, setDiscountError] = useState<string>();
   const [highDiscountAuthorized, setHighDiscountAuthorized] = useState(false);
+  const [highDiscountAuthorizationToken, setHighDiscountAuthorizationToken] = useState<string>();
+  const [storeCreditAuthorizationToken, setStoreCreditAuthorizationToken] = useState<string>();
   const [loadingScan, setLoadingScan] = useState(false);
   const [loadingCheckout, setLoadingCheckout] = useState(false);
   const [message, setMessage] = useState<string>();
@@ -68,13 +74,15 @@ export const Pos = () => {
   const totals = getCartTotals(store.cart, saleDiscountAmount, []);
   const discountPercentLabel = `${discountPercent.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}%`;
   const { data: products, loading: loadingProducts, refresh: refreshProducts } = useAsync(
-    () => desktopApi.products.list({ search: productSearch, pageSize: 40 }),
+    () => desktopApi.products.list({ search: productSearch, pageSize: 40, active: "active" }),
     [productSearch]
   );
   const { data: customers } = useAsync(() => desktopApi.customers.list(customerSearch), [customerSearch]);
   const { data: license } = useAsync(() => desktopApi.license.check(), []);
   const { data: pixConfig } = useAsync(() => desktopApi.pix.getPixConfig(), []);
   const { data: authState, refresh: refreshAuth } = useAsync(() => desktopApi.auth.state(), []);
+  const { data: cashRegister, refresh: refreshCash } = useAsync(() => desktopApi.cash.current(), []);
+  const { data: systemState } = useAsync(() => desktopApi.system.state(), []);
 
   const visibleProducts = products?.data ?? [];
   const selectedCustomer = useMemo(
@@ -82,17 +90,27 @@ export const Pos = () => {
     [customers, store.customer]
   );
   const cashChange = Math.max(cashReceived - totals.total, 0);
-  const pixBlocked = paymentMethod === "pix" && !license?.pixEnabled;
-  const pixNotConfigured = paymentMethod === "pix" && Boolean(license?.pixEnabled) && (!pixConfig?.enabled || !pixConfig.key);
-  const pixWaitingPayment = paymentMethod === "pix" && Boolean(license?.pixEnabled) && Boolean(pixConfig?.enabled && pixConfig.key) && pixCharge?.status !== "paid";
+  const storeCreditLimitExceeded =
+    paymentMethod === "store_credit" &&
+    Boolean(selectedCustomer?.id) &&
+    selectedCustomer!.balance + totals.total > selectedCustomer!.creditLimit;
+  const pixFeatureEnabled = Boolean(license?.features?.pix ?? license?.pixEnabled);
+  const pixBlocked = paymentMethod === "pix" && !pixFeatureEnabled;
+  const pixNotConfigured = paymentMethod === "pix" && pixFeatureEnabled && (!pixConfig?.enabled || !pixConfig.key);
+  const pixWaitingPayment = paymentMethod === "pix" && pixFeatureEnabled && Boolean(pixConfig?.enabled && pixConfig.key) && pixCharge?.status !== "paid";
+  const canSell = !systemState?.usePermissions || Boolean(authState?.user?.permissions?.includes("sell"));
+  const cashClosedBlocksSale = !cashRegister && !systemState?.allowSalesWithoutCashRegister;
   const canConfirmPayment =
     store.cart.length > 0 &&
     !loadingCheckout &&
+    canSell &&
+    !cashClosedBlocksSale &&
     (paymentMethod !== "cash" || cashReceived >= totals.total) &&
-    (paymentMethod !== "store_credit" || Boolean(store.customer?.id)) &&
+    (paymentMethod !== "store_credit" || (Boolean(store.customer?.id) && (!storeCreditLimitExceeded || Boolean(storeCreditAuthorizationToken)))) &&
     !pixBlocked &&
     !pixNotConfigured &&
     !pixWaitingPayment;
+  const canOpenPayment = store.cart.length > 0 && canSell && !cashClosedBlocksSale;
 
   useEffect(() => {
     barcodeRef.current?.focus();
@@ -100,18 +118,30 @@ export const Pos = () => {
 
   useEffect(() => {
     if (!paymentOpen || paymentMethod !== "pix") return;
-    if (!license?.pixEnabled || !pixConfig?.enabled || !pixConfig.key || pixCharge || pixLoading) return;
+    if (!pixFeatureEnabled || !pixConfig?.enabled || !pixConfig.key || pixCharge || pixLoading) return;
     setPixLoading(true);
     desktopApi.pix
       .createChargeMock({ amount: totals.total })
       .then(setPixCharge)
       .catch((error) => setMessage(error instanceof Error ? error.message : "Nao foi possivel gerar Pix mock."))
       .finally(() => setPixLoading(false));
-  }, [license?.pixEnabled, paymentMethod, paymentOpen, pixCharge, pixConfig?.enabled, pixConfig?.key, pixLoading, totals.total]);
+  }, [paymentMethod, paymentOpen, pixCharge, pixConfig?.enabled, pixConfig?.key, pixFeatureEnabled, pixLoading, totals.total]);
+
+  useEffect(() => {
+    setStoreCreditAuthorizationToken(undefined);
+  }, [paymentMethod, selectedCustomer?.id, totals.total]);
 
   const refocusBarcode = () => {
     window.setTimeout(() => barcodeRef.current?.focus(), 50);
   };
+
+  useEffect(() => {
+    if (productDrawerOpen) {
+      window.setTimeout(() => productSearchRef.current?.focus(), 50);
+      return;
+    }
+    if (!paymentOpen && !miscOpen && !managerDiscountOpen && !operatorSwitchOpen && !creditAuthOpen) refocusBarcode();
+  }, [creditAuthOpen, managerDiscountOpen, miscOpen, operatorSwitchOpen, paymentOpen, productDrawerOpen]);
 
   const recordAudit = (action: string, details?: string) => {
     void desktopApi.system.auditEvent({ action, details }).catch(() => undefined);
@@ -124,6 +154,8 @@ export const Pos = () => {
     setPendingDiscountPercent(0);
     setDiscountError(undefined);
     setPixCharge(undefined);
+    setHighDiscountAuthorizationToken(undefined);
+    setStoreCreditAuthorizationToken(undefined);
     refocusBarcode();
   };
 
@@ -164,6 +196,7 @@ export const Pos = () => {
       setManagerDiscountOpen(false);
       setManagerCredential("");
       setDiscountError(undefined);
+      setHighDiscountAuthorizationToken(result.token);
       setMessage(`Desconto de ${requested.toLocaleString("pt-BR", { maximumFractionDigits: 2 })}% autorizado.`);
       recordAudit("desconto maior que 5% autorizado", `${requested}% na venda em andamento`);
       refocusBarcode();
@@ -171,10 +204,34 @@ export const Pos = () => {
     }
     store.setSaleDiscount(5);
     setHighDiscountAuthorized(false);
+    setHighDiscountAuthorizationToken(undefined);
     setDiscountError("Senha incorreta. O desconto ficou limitado a 5%.");
     setMessage("Senha incorreta. O desconto ficou limitado a 5%.");
     recordAudit("tentativa de desconto acima de 5% negada", `${requested}% solicitado`);
     refocusBarcode();
+  };
+
+  const authorizeStoreCreditLimit = async () => {
+    const result = await desktopApi.auth.authorize({
+      login: creditAuthForm.login,
+      pin: creditAuthForm.mode === "pin" ? creditAuthForm.credential : undefined,
+      password: creditAuthForm.mode === "password" ? creditAuthForm.credential : undefined,
+      permission: "authorize_store_credit_limit",
+      requireManager: true
+    });
+    if (result.ok) {
+      setStoreCreditAuthorizationToken(result.token);
+      setCreditAuthOpen(false);
+      setCreditAuthForm((current) => ({ ...current, credential: "" }));
+      setCreditAuthError(undefined);
+      setMessage("Fiado acima do limite autorizado para esta venda.");
+      recordAudit("autorizacao acima do limite fiado", selectedCustomer?.name);
+      refocusBarcode();
+      return;
+    }
+    setStoreCreditAuthorizationToken(undefined);
+    setCreditAuthError(result.message);
+    recordAudit("tentativa acao negada", "fiado acima do limite");
   };
 
   const confirmPixManually = async () => {
@@ -215,8 +272,20 @@ export const Pos = () => {
   };
 
   const addProductToSale = (product: Product) => {
+    if (!product.active) {
+      setMessage(`${product.name} esta inativo.`);
+      refocusBarcode();
+      return;
+    }
+    const currentQuantity = store.cart.find((line) => line.product?.id === product.id)?.quantity ?? 0;
+    if (product.stock <= 0 || currentQuantity >= product.stock) {
+      setMessage(`Estoque insuficiente para ${product.name}.`);
+      refocusBarcode();
+      return;
+    }
     store.addProduct(product);
     setMessage(`${product.name} adicionado.`);
+    setProductDrawerOpen(false);
     refocusBarcode();
   };
 
@@ -227,9 +296,10 @@ export const Pos = () => {
     setMessage(undefined);
     try {
       const response = await desktopApi.products.list({ search: code, pageSize: 20 });
+      const activeProducts = response.data.filter((product) => product.active);
       const exact =
-        response.data.find((product) => product.barcode === code || product.sku === code) ??
-        (response.data.length === 1 ? response.data[0] : undefined);
+        activeProducts.find((product) => product.barcode === code || product.sku === code) ??
+        (activeProducts.length === 1 ? activeProducts[0] : undefined);
 
       if (!exact) {
         setMessage("Produto nao encontrado. Use Buscar produtos para selecionar manualmente.");
@@ -248,6 +318,14 @@ export const Pos = () => {
 
   const openPayment = () => {
     if (!store.cart.length) return;
+    if (!canSell) {
+      setMessage("Operador sem permissao para vender. Solicite acesso de gerente/admin.");
+      return;
+    }
+    if (cashClosedBlocksSale) {
+      setMessage("Caixa fechado. Abra o caixa antes de finalizar vendas.");
+      return;
+    }
     setPixCharge(undefined);
     setCashReceived(paymentMethod === "cash" ? totals.total : 0);
     setPaymentOpen(true);
@@ -263,6 +341,8 @@ export const Pos = () => {
         customerId: store.customer?.id,
         notes: store.notes,
         discount: saleDiscountAmount,
+        highDiscountAuthorizationToken,
+        storeCreditAuthorizationToken,
         items: store.cart.map((line) => ({
           productId: line.product?.id,
           quantity: line.quantity,
@@ -276,12 +356,13 @@ export const Pos = () => {
         })),
         payments: [{ method: paymentMethod, amount: paidAmount }]
       });
-      await desktopApi.receipt.print(sale.receiptHtml).catch(() => undefined);
+      if (systemState?.receiptAutoPrint ?? true) await desktopApi.receipt.print(sale.receiptHtml).catch(() => undefined);
       clearCurrentSale();
       setPaymentOpen(false);
       setBarcode("");
       setMessage(`Venda ${sale.number} finalizada em ${paymentLabel[paymentMethod]}.`);
       refreshProducts();
+      refreshCash();
       refocusBarcode();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Nao foi possivel finalizar a venda.");
@@ -291,14 +372,21 @@ export const Pos = () => {
   };
 
   useHotkeys({
-    F2: () => barcodeRef.current?.focus(),
-    F4: () => openPayment(),
+    F2: () => setProductDrawerOpen(true),
+    F4: () => {
+      if (paymentOpen && canConfirmPayment) void finalizeSale();
+      else openPayment();
+    },
     F6: () => discountRef.current?.focus(),
+    F8: () => discountRef.current?.focus(),
+    F9: () => setMiscOpen(true),
     Escape: () => {
-      if (paymentOpen) setPaymentOpen(false);
+      if (managerDiscountOpen) setManagerDiscountOpen(false);
+      else if (creditAuthOpen) setCreditAuthOpen(false);
+      else if (operatorSwitchOpen) setOperatorSwitchOpen(false);
+      else if (paymentOpen) setPaymentOpen(false);
       else if (miscOpen) setMiscOpen(false);
       else if (productDrawerOpen) setProductDrawerOpen(false);
-      else clearCurrentSale();
       refocusBarcode();
     },
     "Ctrl+f": () => setProductDrawerOpen(true)
@@ -350,7 +438,10 @@ export const Pos = () => {
                 value={barcode}
                 onChange={(event) => setBarcode(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter") void addByBarcode();
+                  if (event.key === "Enter") {
+                    event.stopPropagation();
+                    void addByBarcode();
+                  }
                 }}
                 placeholder="Bipe ou digite o codigo do produto"
                 autoFocus
@@ -404,7 +495,7 @@ export const Pos = () => {
                         <td className="px-5 py-4">
                           <div className="font-bold">{line.description}</div>
                           <div className={`text-xs text-slate-500 ${focusMode ? "hidden" : ""}`}>
-                            {line.custom ? "Produto diverso" : `${line.product?.barcode ?? line.product?.sku ?? "Sem codigo"} · Estoque ${line.product?.stock ?? 0}`}
+                            {line.custom ? "Produto diverso" : `${line.product?.barcode ?? line.product?.sku ?? "Sem codigo"} - Estoque ${line.product?.stock ?? 0}`}
                           </div>
                         </td>
                         <td className="px-4 py-4">
@@ -465,7 +556,7 @@ export const Pos = () => {
                 </option>
               ))}
             </select>
-            {selectedCustomer ? <div className="text-xs text-slate-500">Limite fiado: {formatCurrency(selectedCustomer.creditLimit)} · Saldo {formatCurrency(selectedCustomer.balance)}</div> : null}
+            {selectedCustomer ? <div className="text-xs text-slate-500">Limite fiado: {formatCurrency(selectedCustomer.creditLimit)} - Saldo {formatCurrency(selectedCustomer.balance)}</div> : null}
           </div>
         </div>
         ) : null}
@@ -513,9 +604,19 @@ export const Pos = () => {
               onChange={(event) => handleDiscountPercentChange(event.target.value)}
             />
           </label>
-          {highDiscountAuthorized && discountPercent > 5 ? (
+            {highDiscountAuthorized && discountPercent > 5 ? (
             <div className="rounded-lg bg-emerald-50 p-3 text-sm font-semibold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200">
               Desconto acima de 5% autorizado para esta venda.
+            </div>
+          ) : null}
+          {cashClosedBlocksSale ? (
+            <div className="rounded-lg bg-amber-50 p-3 text-sm font-semibold text-amber-700 dark:bg-amber-950 dark:text-amber-200">
+              Caixa fechado. Abra o caixa para finalizar vendas.
+            </div>
+          ) : null}
+          {!canSell ? (
+            <div className="rounded-lg bg-red-50 p-3 text-sm font-semibold text-red-700 dark:bg-red-950 dark:text-red-200">
+              Operador sem permissao para vender.
             </div>
           ) : null}
           {!focusMode ? <label className="text-sm font-semibold">
@@ -543,7 +644,7 @@ export const Pos = () => {
             <div className="text-xs font-bold uppercase text-slate-500">Total final</div>
             <div className={`mt-1 font-black tracking-normal ${focusMode ? "text-6xl text-mint" : "text-5xl"}`}>{formatCurrency(totals.total)}</div>
           </div>
-          <Button className={`${focusMode ? "mt-6 h-16" : "mt-5 h-14"} w-full text-base`} disabled={!store.cart.length} onClick={openPayment}>
+          <Button className={`${focusMode ? "mt-6 h-16" : "mt-5 h-14"} w-full text-base`} disabled={!canOpenPayment} onClick={openPayment}>
             Finalizar venda
           </Button>
         </div>
@@ -605,6 +706,45 @@ export const Pos = () => {
               <Button disabled={!managerCredential || !managerLogin.trim()} onClick={() => void authorizeHighDiscount()}>
                 Autorizar
               </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {creditAuthOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-8">
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-2xl dark:bg-slate-950">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black">Autorizar fiado</h2>
+                <p className="mt-1 text-sm text-slate-500">A venda ultrapassa o limite do cliente. Informe PIN ou senha de gerente/admin.</p>
+              </div>
+              <button className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-900" onClick={() => setCreditAuthOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3">
+              <input className="field h-12 w-full" value={creditAuthForm.login} onChange={(event) => setCreditAuthForm({ ...creditAuthForm, login: event.target.value })} placeholder="Login gerente/admin" />
+              <div className="grid grid-cols-2 gap-2">
+                <button className={`h-10 rounded-lg text-sm font-bold ${creditAuthForm.mode === "pin" ? "bg-ink text-white dark:bg-white dark:text-ink" : "bg-slate-100 dark:bg-slate-900"}`} onClick={() => setCreditAuthForm({ ...creditAuthForm, mode: "pin" })}>PIN</button>
+                <button className={`h-10 rounded-lg text-sm font-bold ${creditAuthForm.mode === "password" ? "bg-ink text-white dark:bg-white dark:text-ink" : "bg-slate-100 dark:bg-slate-900"}`} onClick={() => setCreditAuthForm({ ...creditAuthForm, mode: "password" })}>Senha</button>
+              </div>
+              <input
+                className="field h-12 w-full"
+                type="password"
+                value={creditAuthForm.credential}
+                onChange={(event) => setCreditAuthForm({ ...creditAuthForm, credential: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void authorizeStoreCreditLimit();
+                }}
+                placeholder={creditAuthForm.mode === "pin" ? "PIN do gerente" : "Senha do gerente"}
+                autoFocus
+              />
+            </div>
+            {creditAuthError ? <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">{creditAuthError}</div> : null}
+            <div className="mt-6 flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => setCreditAuthOpen(false)}>Cancelar</Button>
+              <Button disabled={!creditAuthForm.credential || !creditAuthForm.login.trim()} onClick={() => void authorizeStoreCreditLimit()}>Autorizar</Button>
             </div>
           </div>
         </div>
@@ -715,9 +855,13 @@ export const Pos = () => {
             </div>
             <div className="border-b border-slate-200 p-5 dark:border-slate-800">
               <input
+                ref={productSearchRef}
                 className="field w-full"
                 value={productSearch}
                 onChange={(event) => setProductSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && visibleProducts.length === 1) addProductToSale(visibleProducts[0]);
+                }}
                 placeholder="Nome, SKU ou codigo"
                 autoFocus
               />
@@ -734,13 +878,17 @@ export const Pos = () => {
                   {visibleProducts.map((product) => (
                     <button
                       key={product.id}
-                      className="w-full rounded-lg border border-slate-200 p-4 text-left transition hover:border-cobalt hover:bg-blue-50 dark:border-slate-800 dark:hover:bg-slate-900"
+                      className={`w-full rounded-lg border p-4 text-left transition ${
+                        product.active && product.stock > 0
+                          ? "border-slate-200 hover:border-cobalt hover:bg-blue-50 dark:border-slate-800 dark:hover:bg-slate-900"
+                          : "border-slate-200 opacity-55 dark:border-slate-800"
+                      }`}
                       onClick={() => addProductToSale(product)}
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <div className="truncate font-bold">{product.name}</div>
-                          <div className="mt-1 text-xs text-slate-500">{product.barcode ?? product.sku ?? "Sem codigo"} · Estoque {product.stock}</div>
+                          <div className="mt-1 text-xs text-slate-500">{product.barcode ?? product.sku ?? "Sem codigo"} - Estoque {product.stock}</div>
                         </div>
                         <strong>{formatCurrency(product.price)}</strong>
                       </div>
@@ -840,6 +988,17 @@ export const Pos = () => {
                     </select>
                   </div>
                   {!store.customer?.id ? <p className="mt-3 text-sm text-amber-600">Selecione um cliente antes de confirmar.</p> : null}
+                  {storeCreditLimitExceeded ? (
+                    <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                      <div className="font-bold">Limite de fiado excedido.</div>
+                      <div className="mt-1">Saldo atual + venda: {formatCurrency((selectedCustomer?.balance ?? 0) + totals.total)} de limite {formatCurrency(selectedCustomer?.creditLimit ?? 0)}.</div>
+                      {storeCreditAuthorizationToken ? (
+                        <div className="mt-2 font-bold text-emerald-700 dark:text-emerald-300">Autorizado para esta venda.</div>
+                      ) : (
+                        <Button className="mt-3 h-10 px-3" variant="secondary" onClick={() => setCreditAuthOpen(true)}>Autorizar limite</Button>
+                      )}
+                    </div>
+                  ) : null}
                 </section>
               ) : null}
 
@@ -847,7 +1006,7 @@ export const Pos = () => {
                 <section className="rounded-lg bg-slate-50 p-5 dark:bg-slate-900">
                   {pixBlocked ? (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
-                      Pix e um recurso premium. Ative a licenca Pro/Cloud para usar este meio de pagamento.
+                      Pix e um recurso premium. Ative uma licenca com modulo Pix para usar este meio de pagamento.
                     </div>
                   ) : pixNotConfigured ? (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm font-semibold text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">

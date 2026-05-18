@@ -1,6 +1,6 @@
-import { Download, Plus, Save, Upload, X } from "lucide-react";
+import { Download, PackagePlus, Plus, Save, Upload, X } from "lucide-react";
 import { useState } from "react";
-import type { Product } from "@nexpdv/shared";
+import type { Product, ProductStockMovementType } from "@nexpdv/shared";
 import { formatCurrency } from "@nexpdv/shared";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
@@ -30,12 +30,24 @@ const emptyProduct: Partial<Product> = {
 export const Products = () => {
   const [search, setSearch] = useState("");
   const [lowStock, setLowStock] = useState(false);
+  const [activeFilter, setActiveFilter] = useState<"active" | "inactive" | "all">("active");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [expiringSoon, setExpiringSoon] = useState(false);
   const [form, setForm] = useState<Partial<Product>>(emptyProduct);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [movementProduct, setMovementProduct] = useState<Product>();
+  const [movementForm, setMovementForm] = useState<{ type: ProductStockMovementType; quantity: number; reason: string }>({ type: "entry", quantity: 1, reason: "" });
   const [message, setMessage] = useState<string>();
-  const { data, loading, refresh } = useAsync(() => desktopApi.products.list({ search, lowStock, pageSize: 100 }), [search, lowStock]);
+  const { data, loading, refresh } = useAsync(
+    () => desktopApi.products.list({ search, lowStock, active: activeFilter, categoryId: categoryFilter || undefined, expiringDays: expiringSoon ? 30 : undefined, pageSize: 100 }),
+    [activeFilter, categoryFilter, expiringSoon, lowStock, search]
+  );
   const { data: categories } = useAsync(() => desktopApi.products.categories(), []);
   const { data: systemState, refresh: refreshSystem } = useAsync(() => desktopApi.system.state(), []);
+  const { data: stockHistory, refresh: refreshStockHistory } = useAsync(
+    () => movementProduct?.id ? desktopApi.products.stockMovements(movementProduct.id) : Promise.resolve([]),
+    [movementProduct?.id]
+  );
 
   const openNew = () => {
     setForm(emptyProduct);
@@ -48,11 +60,29 @@ export const Products = () => {
   };
 
   const save = async () => {
-    const saved = await desktopApi.products.save(form);
-    setDrawerOpen(false);
-    setForm(emptyProduct);
-    setMessage(`${saved.name} salvo.`);
-    refresh();
+    try {
+      const saved = await desktopApi.products.save(form);
+      setDrawerOpen(false);
+      setForm(emptyProduct);
+      setMessage(`${saved.name} salvo.`);
+      refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar o produto.");
+    }
+  };
+
+  const saveMovement = async () => {
+    if (!movementProduct) return;
+    try {
+      const updated = await desktopApi.products.stockMovement({ ...movementForm, productId: movementProduct.id });
+      setMovementProduct(updated);
+      setMovementForm({ type: "entry", quantity: 1, reason: "" });
+      setMessage("Movimentacao de estoque registrada.");
+      refresh();
+      refreshStockHistory();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel movimentar o estoque.");
+    }
   };
 
   const importCsv = async (file?: File) => {
@@ -78,9 +108,22 @@ export const Products = () => {
         <div className="flex items-center justify-between border-b border-slate-200 p-5 dark:border-slate-800">
           <div className="flex gap-3">
             <input className="field w-80" placeholder="Pesquisar produtos" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <select className="field" value={activeFilter} onChange={(event) => setActiveFilter(event.target.value as typeof activeFilter)}>
+              <option value="active">Ativos</option>
+              <option value="inactive">Inativos</option>
+              <option value="all">Todos</option>
+            </select>
+            <select className="field" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="">Categorias</option>
+              {categories?.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </select>
             <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold dark:border-slate-700">
               <input type="checkbox" checked={lowStock} onChange={(event) => setLowStock(event.target.checked)} />
               Estoque baixo
+            </label>
+            <label className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 px-3 text-sm font-semibold dark:border-slate-700">
+              <input type="checkbox" checked={expiringSoon} onChange={(event) => setExpiringSoon(event.target.checked)} />
+              Validade proxima
             </label>
           </div>
           <div className="flex items-center gap-3">
@@ -111,6 +154,7 @@ export const Products = () => {
                 <th className="px-4 py-3">Preco</th>
                 <th className="px-4 py-3">Estoque</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
@@ -127,6 +171,15 @@ export const Products = () => {
                   </td>
                   <td className="table-cell">
                     <StatusBadge tone={product.active ? "green" : "slate"}>{product.active ? "Ativo" : "Inativo"}</StatusBadge>
+                  </td>
+                  <td className="table-cell">
+                    <Button className="h-9 px-3" variant="secondary" onClick={(event) => {
+                      event.stopPropagation();
+                      setMovementProduct(product);
+                    }}>
+                      <PackagePlus size={15} />
+                      Estoque
+                    </Button>
                   </td>
                 </tr>
               ))}
@@ -228,7 +281,15 @@ export const Products = () => {
                   </div>
                 ) : null}
                 <label className="flex h-10 items-center gap-2 text-sm font-semibold">
-                  <input type="checkbox" checked={form.active ?? true} onChange={(event) => setForm({ ...form, active: event.target.checked })} />
+                  <input
+                    type="checkbox"
+                    checked={form.active ?? true}
+                    onChange={(event) => {
+                      const next = event.target.checked;
+                      if (!next && !window.confirm("Deseja inativar este produto? Ele nao aparecera na Frente de Caixa.")) return;
+                      setForm({ ...form, active: next });
+                    }}
+                  />
                   Ativo
                 </label>
               </div>
@@ -241,6 +302,46 @@ export const Products = () => {
               </Button>
             </div>
           </aside>
+        </div>
+      ) : null}
+
+      {movementProduct ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-8">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-lg bg-white p-6 shadow-2xl dark:bg-slate-950">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black">Movimentar estoque</h2>
+                <p className="text-sm text-slate-500">{movementProduct.name} - atual: {movementProduct.stock}</p>
+              </div>
+              <button className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-900" onClick={() => setMovementProduct(undefined)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-5 grid grid-cols-[1fr_120px_1fr_auto] gap-3">
+              <select className="field" value={movementForm.type} onChange={(event) => setMovementForm({ ...movementForm, type: event.target.value as ProductStockMovementType })}>
+                <option value="entry">Entrada manual</option>
+                <option value="exit">Saida manual</option>
+                <option value="adjustment">Ajuste de saldo</option>
+                <option value="loss">Perda</option>
+                <option value="expiration">Vencimento</option>
+              </select>
+              <input className="field" type="number" min={0} value={movementForm.quantity || ""} onChange={(event) => setMovementForm({ ...movementForm, quantity: Number(event.target.value) })} />
+              <input className="field" placeholder="Motivo/observacao" value={movementForm.reason} onChange={(event) => setMovementForm({ ...movementForm, reason: event.target.value })} />
+              <Button disabled={movementForm.quantity <= 0} onClick={saveMovement}>Registrar</Button>
+            </div>
+            <div className="mt-6">
+              <h3 className="text-sm font-black uppercase text-slate-500">Historico recente</h3>
+              <div className="mt-3 space-y-2">
+                {stockHistory?.length ? stockHistory.map((item) => (
+                  <div key={item.id} className="grid grid-cols-3 gap-3 rounded-lg bg-slate-50 px-3 py-2 text-sm dark:bg-slate-900">
+                    <span className="font-semibold">{item.type} - {item.quantity}</span>
+                    <span className="text-slate-500">{item.previousStock} -&gt; {item.newStock}</span>
+                    <span className="text-right text-slate-500">{new Date(item.createdAt).toLocaleString("pt-BR")}</span>
+                  </div>
+                )) : <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500 dark:bg-slate-900">Nenhuma movimentacao registrada.</div>}
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

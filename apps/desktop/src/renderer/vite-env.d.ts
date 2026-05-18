@@ -9,6 +9,8 @@ declare global {
       products: {
         list: <T>(query?: unknown) => Promise<T>;
         save: <T>(product: unknown) => Promise<T>;
+        stockMovement: <T>(input: unknown) => Promise<T>;
+        stockMovements: <T>(productId?: string) => Promise<T>;
         categories: <T>() => Promise<T>;
         importCsv: <T>(csv: string) => Promise<T>;
       };
@@ -53,6 +55,10 @@ declare global {
         setUserActive: <T>(input: unknown) => Promise<T>;
         resetPassword: <T>(input: unknown) => Promise<T>;
         resetPin: <T>(input: unknown) => Promise<T>;
+        saveRole: <T>(input: unknown) => Promise<T>;
+        duplicateRole: <T>(roleId: string) => Promise<T>;
+        setRoleActive: <T>(input: unknown) => Promise<T>;
+        resetRoleDefaults: <T>(roleId: string) => Promise<T>;
       };
       system: {
         state: <T>() => Promise<T>;

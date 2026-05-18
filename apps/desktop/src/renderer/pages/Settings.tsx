@@ -69,8 +69,18 @@ export const Settings = () => {
   const [tab, setTab] = useState<SettingsTab>("company");
   const [dark, setDark] = useState(true);
   const [companyForm, setCompanyForm] = useState<Partial<Company>>({});
+  const [licenseForm, setLicenseForm] = useState({ ownerEmail: "", licenseKey: "", companyName: "" });
   const [cloudForm, setCloudForm] = useState({ cloudKey: "", ownerEmail: "" });
-  const [backupForm, setBackupForm] = useState({ backupPath: "", restorePath: "", automaticBackupEnabled: false, allowSalesWithoutCashRegister: false });
+  const [backupForm, setBackupForm] = useState({
+    backupPath: "",
+    restorePath: "",
+    automaticBackupEnabled: false,
+    allowSalesWithoutCashRegister: false,
+    blockNegativeStock: true,
+    receiptWidthMm: 80 as 58 | 80,
+    receiptFooterMessage: "Obrigado pela preferencia.",
+    receiptAutoPrint: true
+  });
   const [pixForm, setPixForm] = useState<Partial<PixConfig>>(emptyPixForm);
   const [fiscalForm, setFiscalForm] = useState<Partial<FiscalConfig>>(emptyFiscalForm);
   const [securityForm, setSecurityForm] = useState<SecuritySettings>({
@@ -101,11 +111,20 @@ export const Settings = () => {
     if (systemState?.company) {
       setCompanyForm(systemState.company);
       setCloudForm((current) => ({ ...current, ownerEmail: systemState.company.ownerEmail ?? "" }));
+      setLicenseForm((current) => ({
+        ownerEmail: current.ownerEmail || systemState.license?.ownerEmail || systemState.company.ownerEmail || "",
+        licenseKey: current.licenseKey || systemState.license?.key || "",
+        companyName: current.companyName || systemState.company.tradeName || systemState.company.name || ""
+      }));
       setBackupForm((current) => ({
         ...current,
         backupPath: systemState.backupPath ?? current.backupPath,
         automaticBackupEnabled: systemState.automaticBackupEnabled ?? false,
-        allowSalesWithoutCashRegister: systemState.allowSalesWithoutCashRegister ?? false
+        allowSalesWithoutCashRegister: systemState.allowSalesWithoutCashRegister ?? false,
+        blockNegativeStock: systemState.blockNegativeStock ?? true,
+        receiptWidthMm: systemState.receiptWidthMm ?? 80,
+        receiptFooterMessage: systemState.receiptFooterMessage ?? current.receiptFooterMessage,
+        receiptAutoPrint: systemState.receiptAutoPrint ?? true
       }));
     }
   }, [systemState]);
@@ -132,15 +151,30 @@ export const Settings = () => {
     if (securitySettings) setSecurityForm(securitySettings);
   }, [securitySettings]);
 
-  const cloudEnabled = systemState?.cloudEnabled ?? license?.cloudEnabled ?? false;
-  const pixEnabled = Boolean(license?.pixEnabled);
-  const fiscalEnabled = Boolean(license?.fiscalEnabled);
+  const cloudEnabled = Boolean(license?.features?.cloud ?? systemState?.cloudEnabled);
+  const pixEnabled = Boolean(license?.features?.pix ?? license?.pixEnabled);
+  const fiscalEnabled = Boolean(license?.features?.fiscal ?? license?.fiscalEnabled);
 
   const saveCompany = async () => {
-    const saved = await desktopApi.system.company(companyForm);
-    setCompanyForm(saved);
-    setMessage("Empresa salva.");
-    refreshSystem();
+    try {
+      const saved = await desktopApi.system.company(companyForm);
+      setCompanyForm(saved);
+      setMessage("Empresa salva.");
+      refreshSystem();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar a empresa.");
+    }
+  };
+
+  const activateLicense = async () => {
+    try {
+      await desktopApi.system.activate(licenseForm);
+      setMessage("Licenca ativada e salva localmente.");
+      refreshSystem();
+      refreshLicense();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel ativar a licenca.");
+    }
   };
 
   const activateCloud = async () => {
@@ -155,25 +189,41 @@ export const Settings = () => {
   };
 
   const syncNow = async () => {
-    const state = await desktopApi.sync.flush();
-    setSyncMessage(state.lastError ?? `${state.pending} itens pendentes.`);
+    try {
+      const state = await desktopApi.sync.flush();
+      setSyncMessage(state.lastError ?? `${state.pending} itens pendentes.`);
+    } catch (error) {
+      setSyncMessage(error instanceof Error ? error.message : "Nao foi possivel sincronizar.");
+    }
   };
 
   const saveCoreSettings = async () => {
-    await desktopApi.system.settings({
-      backupPath: backupForm.backupPath,
-      automaticBackupEnabled: backupForm.automaticBackupEnabled,
-      allowSalesWithoutCashRegister: backupForm.allowSalesWithoutCashRegister
-    });
-    setMessage("Configuracoes salvas.");
-    refreshSystem();
-    refreshBackup();
+    try {
+      await desktopApi.system.settings({
+        backupPath: backupForm.backupPath,
+        automaticBackupEnabled: backupForm.automaticBackupEnabled,
+        allowSalesWithoutCashRegister: backupForm.allowSalesWithoutCashRegister,
+        blockNegativeStock: backupForm.blockNegativeStock,
+        receiptWidthMm: backupForm.receiptWidthMm,
+        receiptFooterMessage: backupForm.receiptFooterMessage,
+        receiptAutoPrint: backupForm.receiptAutoPrint
+      });
+      setMessage("Configuracoes salvas.");
+      refreshSystem();
+      refreshBackup();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar as configuracoes.");
+    }
   };
 
   const exportBackup = async () => {
-    const result = await desktopApi.system.backupExport();
-    setMessage(`Backup exportado em: ${result.filePath}`);
-    refreshBackup();
+    try {
+      const result = await desktopApi.system.backupExport();
+      setMessage(`Backup exportado em: ${result.filePath}`);
+      refreshBackup();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel exportar o backup.");
+    }
   };
 
   const restoreBackup = async () => {
@@ -188,27 +238,43 @@ export const Settings = () => {
   };
 
   const savePix = async () => {
-    await desktopApi.pix.savePixConfig(pixForm);
-    await desktopApi.system.auditEvent({ action: "teste Pix executado", details: "Configuracao salva via aba Pix" });
-    setMessage("Configuracao Pix salva.");
-    refreshPix();
+    try {
+      await desktopApi.pix.savePixConfig(pixForm);
+      await desktopApi.system.auditEvent({ action: "teste Pix executado", details: "Configuracao salva via aba Pix" });
+      setMessage("Configuracao Pix salva.");
+      refreshPix();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar o Pix.");
+    }
   };
 
   const testPix = async () => {
-    const charge = await desktopApi.pix.createChargeMock({ amount: 1 });
-    setMessage(`Teste Pix executado. Cobranca mock: ${charge.id}`);
-    refreshPix();
+    try {
+      const charge = await desktopApi.pix.createChargeMock({ amount: 1 });
+      setMessage(`Teste Pix executado. Cobranca mock: ${charge.id}`);
+      refreshPix();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel testar o Pix.");
+    }
   };
 
   const saveFiscal = async () => {
-    await desktopApi.fiscal.saveFiscalConfig(fiscalForm);
-    setMessage("Configuracao fiscal salva.");
-    refreshFiscal();
+    try {
+      await desktopApi.fiscal.saveFiscalConfig(fiscalForm);
+      setMessage("Configuracao fiscal salva.");
+      refreshFiscal();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar o Fiscal.");
+    }
   };
 
   const testFiscal = async () => {
-    const result = await desktopApi.fiscal.validateFiscalConfig();
-    setMessage(result.valid ? "Teste fiscal executado. Configuracao mock valida." : `Teste fiscal executado: ${result.errors.join(" ")}`);
+    try {
+      const result = await desktopApi.fiscal.validateFiscalConfig();
+      setMessage(result.valid ? "Teste fiscal executado. Configuracao mock valida." : `Teste fiscal executado: ${result.errors.join(" ")}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel testar o Fiscal.");
+    }
   };
 
   const saveSecurity = async () => {
@@ -265,20 +331,32 @@ export const Settings = () => {
           <div className="mt-4 space-y-3 text-sm">
             <div className="flex items-center justify-between"><span>Chave</span><strong>{license?.key || "Nao ativada"}</strong></div>
             <div className="flex items-center justify-between"><span>Status</span><StatusBadge tone={license?.valid ? "green" : "red"}>{license?.status ?? "missing"}</StatusBadge></div>
-            <div className="flex items-center justify-between"><span>Modo</span><strong>{cloudEnabled ? "Cloud" : "Offline"}</strong></div>
+            <div className="flex items-center justify-between"><span>Plano</span><strong>{license?.planLabel ?? "Nao ativado"}</strong></div>
+            <div className="flex items-center justify-between"><span>Validade</span><strong>{license?.validUntil ? new Date(license.validUntil).toLocaleDateString("pt-BR") : "-"}</strong></div>
+            <div className="flex items-center justify-between"><span>Validacao</span><strong>{license?.validationMode === "online" ? "Online" : "Local offline-first"}</strong></div>
             <div className="grid grid-cols-5 gap-2 pt-2">
               {[
                 ["Cloud", cloudEnabled],
-                ["Fiscal", license?.fiscalEnabled],
-                ["Pix", license?.pixEnabled],
-                ["Mobile", license?.mobileEnabled],
-                ["Intelligence", license?.intelligenceEnabled]
+                ["Fiscal", fiscalEnabled],
+                ["Pix", pixEnabled],
+                ["Mobile", license?.features?.mobile ?? license?.mobileEnabled],
+                ["Intelligence", license?.features?.intelligence ?? license?.intelligenceEnabled]
               ].map(([label, enabled]) => (
                 <div key={String(label)} className="rounded-lg bg-slate-50 px-3 py-3 text-center dark:bg-slate-950">
                   <div className="mb-2 font-bold">{label}</div>
                   <StatusBadge tone={enabled ? "green" : "slate"}>{enabled ? "Ativo" : "Bloqueado"}</StatusBadge>
                 </div>
               ))}
+            </div>
+            <div className="mt-5 rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+              <h3 className="font-bold">Ativar ou trocar licenca</h3>
+              <div className="mt-3 grid grid-cols-[1fr_1fr_1fr_auto] gap-3">
+                <input className="field" placeholder="Email do dono" value={licenseForm.ownerEmail} onChange={(event) => setLicenseForm({ ...licenseForm, ownerEmail: event.target.value })} />
+                <input className="field uppercase" placeholder="Chave de ativacao" value={licenseForm.licenseKey} onChange={(event) => setLicenseForm({ ...licenseForm, licenseKey: event.target.value })} />
+                <input className="field" placeholder="Nome do estabelecimento" value={licenseForm.companyName} onChange={(event) => setLicenseForm({ ...licenseForm, companyName: event.target.value })} />
+                <Button disabled={!licenseForm.ownerEmail || !licenseForm.licenseKey || !licenseForm.companyName} onClick={activateLicense}>Salvar licenca</Button>
+              </div>
+              <div className="mt-3 text-xs text-slate-500">Chaves locais: NEXPDV-OFFLINE-2026, NEXPDV-CLOUD-2026, NEXPDV-PRO-2026.</div>
             </div>
             {!cloudEnabled ? (
               <div className="mt-5 rounded-lg border border-slate-200 p-4 dark:border-slate-800">
@@ -320,6 +398,30 @@ export const Settings = () => {
               <input type="checkbox" checked={backupForm.allowSalesWithoutCashRegister} onChange={(event) => setBackupForm({ ...backupForm, allowSalesWithoutCashRegister: event.target.checked })} />
               Permitir venda com caixa fechado
             </label>
+            <label className="flex items-center gap-2 text-sm font-semibold">
+              <input type="checkbox" checked={backupForm.blockNegativeStock} onChange={(event) => setBackupForm({ ...backupForm, blockNegativeStock: event.target.checked })} />
+              Bloquear estoque negativo
+            </label>
+            <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
+              <h3 className="text-sm font-black uppercase text-slate-500">Cupom / comprovante</h3>
+              <div className="mt-3 grid grid-cols-3 gap-3">
+                <label className="text-sm font-semibold">
+                  Largura
+                  <select className="field mt-1 w-full" value={backupForm.receiptWidthMm} onChange={(event) => setBackupForm({ ...backupForm, receiptWidthMm: Number(event.target.value) as 58 | 80 })}>
+                    <option value={58}>58mm</option>
+                    <option value={80}>80mm</option>
+                  </select>
+                </label>
+                <label className="col-span-2 text-sm font-semibold">
+                  Mensagem de rodape
+                  <input className="field mt-1 w-full" value={backupForm.receiptFooterMessage} onChange={(event) => setBackupForm({ ...backupForm, receiptFooterMessage: event.target.value })} />
+                </label>
+                <label className="col-span-3 flex items-center gap-2 text-sm font-semibold">
+                  <input type="checkbox" checked={backupForm.receiptAutoPrint} onChange={(event) => setBackupForm({ ...backupForm, receiptAutoPrint: event.target.checked })} />
+                  Imprimir automaticamente ao finalizar venda
+                </label>
+              </div>
+            </div>
             <div className="grid grid-cols-2 gap-2">
               <Button variant="secondary" onClick={saveCoreSettings}>Salvar backup/core</Button>
               <Button onClick={exportBackup}>Exportar backup</Button>
