@@ -78,6 +78,10 @@ declare global {
       pix: {
         config: <T>() => Promise<T>;
         saveConfig: <T>(input: unknown) => Promise<T>;
+        testConnection: <T>() => Promise<T>;
+        createCharge: <T>(input: unknown) => Promise<T>;
+        charge: <T>(input: unknown) => Promise<T>;
+        cancelCharge: <T>(chargeId: string) => Promise<T>;
         createChargeMock: <T>(input: unknown) => Promise<T>;
         chargeStatusMock: <T>(chargeId: string) => Promise<T>;
         cancelChargeMock: <T>(chargeId: string) => Promise<T>;
@@ -93,7 +97,12 @@ declare global {
         cancelDocumentMock: <T>(documentId: string) => Promise<T>;
         statusMock: <T>(documentId: string) => Promise<T>;
       };
-      receipt: { print: (html: string) => Promise<void> };
+      printers: {
+        list: <T>() => Promise<T>;
+        test: <T>(input?: unknown) => Promise<T>;
+        openDrawer: <T>(input?: unknown) => Promise<T>;
+      };
+      receipt: { print: <T>(input: unknown) => Promise<T> };
     };
   }
 }

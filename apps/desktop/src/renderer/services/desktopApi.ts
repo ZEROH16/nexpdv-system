@@ -1,5 +1,6 @@
 import type {
   CashRegister,
+  CashMovement,
   Company,
   Customer,
   DashboardMetrics,
@@ -11,6 +12,7 @@ import type {
   PaymentMethod,
   PixCharge,
   PixChargeStatus,
+  PixConnectionStatus,
   PixConfig,
   Product,
   ProductStockMovement,
@@ -29,6 +31,7 @@ export interface CartInput {
   discount?: number;
   highDiscountAuthorizationToken?: string;
   storeCreditAuthorizationToken?: string;
+  pixChargeId?: string;
   items: Array<{ productId?: string; quantity: number; discount?: number; description?: string; unitPrice?: number; cost?: number; category?: string; notes?: string; custom?: boolean }>;
   payments: Array<{ method: PaymentMethod; amount: number }>;
 }
@@ -52,6 +55,7 @@ export interface CashSummary {
   expenseTotal: number;
   withdrawalTotal: number;
   expectedAmount: number;
+  recentMovements: CashMovement[];
 }
 
 export interface SystemState {
@@ -64,6 +68,7 @@ export interface SystemState {
   automaticBackupEnabled: boolean;
   backupPath: string;
   receiptWidthMm: 58 | 80;
+  receiptPrinterName: string;
   receiptFooterMessage: string;
   receiptAutoPrint: boolean;
   company: Partial<Company>;
@@ -171,6 +176,20 @@ export interface BackupState {
   lastBackupAt?: string;
 }
 
+export interface ThermalPrinterInfo {
+  name: string;
+  displayName: string;
+  description?: string;
+  status?: number;
+  isDefault: boolean;
+}
+
+export interface ReceiptPrintContext {
+  saleId?: string;
+  saleNumber?: string;
+  reason?: "sale" | "reprint" | "test";
+}
+
 export const desktopApi = {
   dashboard: () => window.nexpdv.dashboard.get<DashboardMetrics>(),
   products: {
@@ -236,7 +255,7 @@ export const desktopApi = {
   system: {
     state: () => window.nexpdv.system.state<SystemState>(),
     activate: (input: { ownerEmail: string; licenseKey: string; companyName: string }) => window.nexpdv.system.activate<SystemState>(input),
-    settings: (input: { usePermissions?: boolean; locationControl?: boolean; allowSalesWithoutCashRegister?: boolean; blockNegativeStock?: boolean; automaticBackupEnabled?: boolean; backupPath?: string; receiptWidthMm?: 58 | 80; receiptFooterMessage?: string; receiptAutoPrint?: boolean }) => window.nexpdv.system.settings<SystemState>(input),
+    settings: (input: { usePermissions?: boolean; locationControl?: boolean; allowSalesWithoutCashRegister?: boolean; blockNegativeStock?: boolean; automaticBackupEnabled?: boolean; backupPath?: string; receiptWidthMm?: 58 | 80; receiptPrinterName?: string; receiptFooterMessage?: string; receiptAutoPrint?: boolean }) => window.nexpdv.system.settings<SystemState>(input),
     cloud: (input: { cloudKey: string; ownerEmail: string }) => window.nexpdv.system.cloud<SystemState>(input),
     company: (input: Partial<Company>) => window.nexpdv.system.company<Partial<Company>>(input),
     manager: (password: string) => window.nexpdv.system.manager<{ ok: boolean; role?: "manager" | "admin" | "owner"; message: string }>(password),
@@ -251,6 +270,10 @@ export const desktopApi = {
   pix: {
     getPixConfig: () => window.nexpdv.pix.config<PixConfig>(),
     savePixConfig: (input: Partial<PixConfig>) => window.nexpdv.pix.saveConfig<PixConfig>(input),
+    testConnection: () => window.nexpdv.pix.testConnection<{ status: PixConnectionStatus; message: string }>(),
+    createCharge: (input: { amount: number; saleId?: string }) => window.nexpdv.pix.createCharge<PixCharge>(input),
+    getCharge: (input: string | { chargeId: string; refreshProvider?: boolean }) => window.nexpdv.pix.charge<PixCharge>(input),
+    cancelCharge: (chargeId: string) => window.nexpdv.pix.cancelCharge<PixCharge>(chargeId),
     createChargeMock: (input: { amount: number; saleId?: string }) => window.nexpdv.pix.createChargeMock<PixCharge>(input),
     getChargeStatusMock: (chargeId: string) => window.nexpdv.pix.chargeStatusMock<PixChargeStatus>(chargeId),
     cancelChargeMock: (chargeId: string) => window.nexpdv.pix.cancelChargeMock<PixCharge>(chargeId),
@@ -266,7 +289,12 @@ export const desktopApi = {
     cancelFiscalDocumentMock: (documentId: string) => window.nexpdv.fiscal.cancelDocumentMock<FiscalDocument>(documentId),
     getFiscalStatusMock: (documentId: string) => window.nexpdv.fiscal.statusMock<FiscalStatus>(documentId)
   },
+  printers: {
+    list: () => window.nexpdv.printers.list<ThermalPrinterInfo[]>(),
+    test: (input?: { printerName?: string; widthMm?: 58 | 80 }) => window.nexpdv.printers.test<{ ok: true }>(input),
+    openDrawer: (input?: { printerName?: string; widthMm?: 58 | 80 }) => window.nexpdv.printers.openDrawer<{ ok: true; mode: "escpos" }>(input)
+  },
   receipt: {
-    print: (html: string) => window.nexpdv.receipt.print(html)
+    print: (html: string, context?: ReceiptPrintContext) => window.nexpdv.receipt.print<{ ok: true }>({ html, context })
   }
 };

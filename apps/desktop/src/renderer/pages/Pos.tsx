@@ -30,13 +30,15 @@ const pixStatusLabel = {
   waiting: "aguardando",
   paid: "pago",
   expired: "expirado",
-  cancelled: "cancelado"
+  cancelled: "cancelado",
+  error: "erro"
 };
 
 export const Pos = () => {
   const barcodeRef = useRef<HTMLInputElement>(null);
   const discountRef = useRef<HTMLInputElement>(null);
   const productSearchRef = useRef<HTMLInputElement>(null);
+  const pixAutoFinalizeRef = useRef<string>();
   const [barcode, setBarcode] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [customerSearch, setCustomerSearch] = useState("");
@@ -48,6 +50,7 @@ export const Pos = () => {
   const [cashReceived, setCashReceived] = useState(0);
   const [pixCharge, setPixCharge] = useState<PixCharge>();
   const [pixLoading, setPixLoading] = useState(false);
+  const [pixCountdown, setPixCountdown] = useState<number>();
   const [managerDiscountOpen, setManagerDiscountOpen] = useState(false);
   const [managerCredential, setManagerCredential] = useState("");
   const [managerLogin, setManagerLogin] = useState("gerente");
@@ -95,9 +98,11 @@ export const Pos = () => {
     Boolean(selectedCustomer?.id) &&
     selectedCustomer!.balance + totals.total > selectedCustomer!.creditLimit;
   const pixFeatureEnabled = Boolean(license?.features?.pix ?? license?.pixEnabled);
+  const pixProvider = (pixConfig?.provider ?? "mock").toLowerCase();
+  const pixProviderLabel = pixProvider === "pagbank" ? "PagBank" : "Mock/manual";
   const pixBlocked = paymentMethod === "pix" && !pixFeatureEnabled;
-  const pixNotConfigured = paymentMethod === "pix" && pixFeatureEnabled && (!pixConfig?.enabled || !pixConfig.key);
-  const pixWaitingPayment = paymentMethod === "pix" && pixFeatureEnabled && Boolean(pixConfig?.enabled && pixConfig.key) && pixCharge?.status !== "paid";
+  const pixNotConfigured = paymentMethod === "pix" && pixFeatureEnabled && (!pixConfig?.enabled || (pixProvider === "mock" && !pixConfig.key) || (pixProvider === "pagbank" && !pixConfig.apiKey));
+  const pixWaitingPayment = paymentMethod === "pix" && pixFeatureEnabled && Boolean(pixConfig?.enabled) && pixCharge?.status !== "paid";
   const canSell = !systemState?.usePermissions || Boolean(authState?.user?.permissions?.includes("sell"));
   const cashClosedBlocksSale = !cashRegister && !systemState?.allowSalesWithoutCashRegister;
   const canConfirmPayment =
@@ -118,14 +123,36 @@ export const Pos = () => {
 
   useEffect(() => {
     if (!paymentOpen || paymentMethod !== "pix") return;
-    if (!pixFeatureEnabled || !pixConfig?.enabled || !pixConfig.key || pixCharge || pixLoading) return;
+    if (!pixFeatureEnabled || !pixConfig?.enabled || pixNotConfigured || pixCharge || pixLoading) return;
     setPixLoading(true);
     desktopApi.pix
-      .createChargeMock({ amount: totals.total })
+      .createCharge({ amount: totals.total })
       .then(setPixCharge)
-      .catch((error) => setMessage(error instanceof Error ? error.message : "Nao foi possivel gerar Pix mock."))
+      .catch((error) => setMessage(error instanceof Error ? error.message : "Nao foi possivel gerar a cobranca Pix."))
       .finally(() => setPixLoading(false));
-  }, [paymentMethod, paymentOpen, pixCharge, pixConfig?.enabled, pixConfig?.key, pixFeatureEnabled, pixLoading, totals.total]);
+  }, [paymentMethod, paymentOpen, pixCharge, pixConfig?.enabled, pixFeatureEnabled, pixLoading, pixNotConfigured, totals.total]);
+
+  useEffect(() => {
+    if (!paymentOpen || paymentMethod !== "pix" || !pixCharge || pixCharge.status !== "waiting") return;
+    const poll = window.setInterval(() => {
+      desktopApi.pix
+        .getCharge({ chargeId: pixCharge.id, refreshProvider: true })
+        .then(setPixCharge)
+        .catch((error) => setMessage(error instanceof Error ? error.message : "Falha ao consultar Pix."));
+    }, 5000);
+    return () => window.clearInterval(poll);
+  }, [paymentMethod, paymentOpen, pixCharge?.id, pixCharge?.status]);
+
+  useEffect(() => {
+    if (!paymentOpen || paymentMethod !== "pix" || !pixCharge?.expiresAt) {
+      setPixCountdown(undefined);
+      return;
+    }
+    const updateCountdown = () => setPixCountdown(Math.max(0, Math.ceil((new Date(pixCharge.expiresAt!).getTime() - Date.now()) / 1000)));
+    updateCountdown();
+    const timer = window.setInterval(updateCountdown, 1000);
+    return () => window.clearInterval(timer);
+  }, [paymentMethod, paymentOpen, pixCharge?.expiresAt]);
 
   useEffect(() => {
     setStoreCreditAuthorizationToken(undefined);
@@ -154,6 +181,7 @@ export const Pos = () => {
     setPendingDiscountPercent(0);
     setDiscountError(undefined);
     setPixCharge(undefined);
+    pixAutoFinalizeRef.current = undefined;
     setHighDiscountAuthorizationToken(undefined);
     setStoreCreditAuthorizationToken(undefined);
     refocusBarcode();
@@ -241,9 +269,17 @@ export const Pos = () => {
     setMessage("Pagamento Pix confirmado manualmente.");
   };
 
+  const cancelPixCharge = async () => {
+    if (!pixCharge) return;
+    const updated = await desktopApi.pix.cancelCharge(pixCharge.id);
+    setPixCharge(updated);
+    setMessage("Cobranca Pix cancelada.");
+  };
+
   const copyPixPayload = async () => {
-    if (!pixCharge?.qrCodePayload) return;
-    await navigator.clipboard?.writeText(pixCharge.qrCodePayload).catch(() => undefined);
+    const payload = pixCharge?.payloadPix ?? pixCharge?.qrCodePayload;
+    if (!payload) return;
+    await navigator.clipboard?.writeText(payload).catch(() => undefined);
     setMessage("Codigo Pix copiado.");
   };
 
@@ -343,6 +379,7 @@ export const Pos = () => {
         discount: saleDiscountAmount,
         highDiscountAuthorizationToken,
         storeCreditAuthorizationToken,
+        pixChargeId: paymentMethod === "pix" ? pixCharge?.id : undefined,
         items: store.cart.map((line) => ({
           productId: line.product?.id,
           quantity: line.quantity,
@@ -356,11 +393,16 @@ export const Pos = () => {
         })),
         payments: [{ method: paymentMethod, amount: paidAmount }]
       });
-      if (systemState?.receiptAutoPrint ?? true) await desktopApi.receipt.print(sale.receiptHtml).catch(() => undefined);
+      let printWarning: string | undefined;
+      if (systemState?.receiptAutoPrint ?? true) {
+        await desktopApi.receipt.print(sale.receiptHtml, { saleId: sale.id, saleNumber: sale.number, reason: "sale" }).catch((error) => {
+          printWarning = error instanceof Error ? error.message : "Nao foi possivel imprimir o comprovante.";
+        });
+      }
       clearCurrentSale();
       setPaymentOpen(false);
       setBarcode("");
-      setMessage(`Venda ${sale.number} finalizada em ${paymentLabel[paymentMethod]}.`);
+      setMessage(printWarning ? `Venda ${sale.number} finalizada em ${paymentLabel[paymentMethod]}. Impressao: ${printWarning}` : `Venda ${sale.number} finalizada em ${paymentLabel[paymentMethod]}.`);
       refreshProducts();
       refreshCash();
       refocusBarcode();
@@ -370,6 +412,13 @@ export const Pos = () => {
       setLoadingCheckout(false);
     }
   };
+
+  useEffect(() => {
+    if (!paymentOpen || paymentMethod !== "pix" || pixCharge?.status !== "paid") return;
+    if (pixAutoFinalizeRef.current === pixCharge.id || loadingCheckout) return;
+    pixAutoFinalizeRef.current = pixCharge.id;
+    void finalizeSale();
+  }, [loadingCheckout, paymentMethod, paymentOpen, pixCharge?.id, pixCharge?.status]);
 
   useHotkeys({
     F2: () => setProductDrawerOpen(true),
@@ -1014,29 +1063,65 @@ export const Pos = () => {
                     </div>
                   ) : (
                     <div className="grid gap-4">
-                      <div className="grid grid-cols-3 gap-4">
+                      <div className="grid grid-cols-4 gap-4">
                         <div>
                           <div className="text-xs font-bold uppercase text-slate-500">Valor</div>
                           <div className="mt-1 text-2xl font-black">{formatCurrency(totals.total)}</div>
                         </div>
                         <div>
-                          <div className="text-xs font-bold uppercase text-slate-500">Chave Pix</div>
-                          <div className="mt-1 truncate font-bold">{pixConfig?.key}</div>
+                          <div className="text-xs font-bold uppercase text-slate-500">Provider</div>
+                          <div className="mt-1 font-bold">{pixProviderLabel}</div>
                         </div>
                         <div>
                           <div className="text-xs font-bold uppercase text-slate-500">Status</div>
-                          <div className="mt-1 font-bold">{pixLoading ? "gerando" : pixCharge ? pixStatusLabel[pixCharge.status] : "aguardando"}</div>
+                          <div className={`mt-1 inline-flex rounded-full px-3 py-1 text-xs font-black ${
+                            pixCharge?.status === "paid"
+                              ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                              : pixCharge?.status === "error" || pixCharge?.status === "expired" || pixCharge?.status === "cancelled"
+                                ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300"
+                                : "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+                          }`}>
+                            {pixLoading ? "gerando" : pixCharge ? pixStatusLabel[pixCharge.status] : "aguardando"}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold uppercase text-slate-500">Tempo</div>
+                          <div className="mt-1 font-bold">{pixCountdown !== undefined ? `${Math.floor(pixCountdown / 60)}:${String(pixCountdown % 60).padStart(2, "0")}` : "15:00"}</div>
                         </div>
                       </div>
-                      <div className="rounded-lg border border-slate-200 bg-white p-4 font-mono text-xs dark:border-slate-800 dark:bg-slate-950">
-                        {pixCharge?.qrCodePayload ?? "Gerando QR Code mockado..."}
+                      <div className="grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+                        <div className="flex h-[220px] items-center justify-center rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800">
+                          {pixLoading ? (
+                            <Skeleton className="h-full w-full" />
+                          ) : pixCharge?.qrCode ? (
+                            <img className="h-full w-full object-contain" src={pixCharge.qrCode} alt="QR Code Pix" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center rounded-lg bg-slate-100 text-center text-xs font-bold text-slate-500 dark:bg-slate-900">
+                              QR Code indisponivel
+                              <br />
+                              use copia e cola
+                            </div>
+                          )}
+                        </div>
+                        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+                          <div className="text-xs font-bold uppercase text-slate-500">Pix copia e cola</div>
+                          <div className="mt-3 max-h-32 overflow-auto break-all font-mono text-xs">
+                            {pixCharge?.payloadPix ?? pixCharge?.qrCodePayload ?? "Gerando cobranca Pix..."}
+                          </div>
+                          {pixCharge?.providerPaymentId ? <div className="mt-3 text-xs text-slate-500">Pagamento: {pixCharge.providerPaymentId}</div> : null}
+                          {pixCharge?.providerStatus ? <div className="mt-1 text-xs text-slate-500">Provider status: {pixCharge.providerStatus}</div> : null}
+                          {pixCharge?.errorMessage ? <div className="mt-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-amber-700 dark:bg-amber-950 dark:text-amber-200">{pixCharge.errorMessage}</div> : null}
+                          {pixCharge?.manualConfirmation ? <div className="mt-3 rounded-lg bg-blue-50 p-3 text-xs font-semibold text-blue-700 dark:bg-blue-950 dark:text-blue-200">Confirmacao manual registrada para manter o PDV operando offline.</div> : null}
+                        </div>
                       </div>
-                      <div className="flex gap-3">
+                      <div className="flex flex-wrap gap-3">
                         <Button variant="secondary" disabled={!pixCharge} onClick={() => void copyPixPayload()}>Copiar</Button>
+                        <Button variant="secondary" disabled={!pixCharge || pixCharge.status !== "waiting"} onClick={() => void cancelPixCharge()}>Cancelar cobranca</Button>
                         <Button disabled={!pixCharge || pixCharge.status === "paid"} onClick={() => void confirmPixManually()}>
                           Confirmar pagamento manualmente
                         </Button>
                       </div>
+                      <div className="text-xs text-slate-500">O NexPDV consulta o status automaticamente. Se o PagBank ou a internet falhar, a confirmacao manual mantem a venda funcionando offline.</div>
                     </div>
                   )}
                 </section>

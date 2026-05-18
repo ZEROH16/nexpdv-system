@@ -10,6 +10,7 @@ import {
   roundMoney,
   saleNumber,
   type CashRegister,
+  type CashMovement,
   type Company,
   type Customer,
   type DashboardMetrics,
@@ -21,6 +22,7 @@ import {
   type PixCharge,
   type PixChargeStatus,
   type PixConfig,
+  type PixConnectionStatus,
   type Product,
   type ProductStockMovement,
   type ProductStockMovementType,
@@ -86,6 +88,7 @@ export interface CheckoutInput {
   discount?: number;
   highDiscountAuthorizationToken?: string;
   storeCreditAuthorizationToken?: string;
+  pixChargeId?: string;
   items: Array<{
     productId?: string;
     quantity: number;
@@ -113,6 +116,7 @@ export interface CashSummary {
   expenseTotal: number;
   withdrawalTotal: number;
   expectedAmount: number;
+  recentMovements: CashMovement[];
 }
 
 export interface ActivationInput {
@@ -136,6 +140,7 @@ export interface SystemState {
   backupPath: string;
   blockNegativeStock: boolean;
   receiptWidthMm: 58 | 80;
+  receiptPrinterName: string;
   receiptFooterMessage: string;
   receiptAutoPrint: boolean;
   company: Partial<Company>;
@@ -832,6 +837,9 @@ export class LocalDatabase {
     if (!input.payments.length) throw new Error("Informe uma forma de pagamento.");
     if (input.payments.some((payment) => payment.method === "pix")) {
       assertLicensedModule(this, "pix");
+      const pixCharge = input.pixChargeId ? this.pixService().getChargeMock(input.pixChargeId) : undefined;
+      if (!pixCharge) throw new Error("Cobranca Pix nao encontrada. Gere uma cobranca antes de finalizar.");
+      if (pixCharge.status !== "paid") throw new Error("Pagamento Pix ainda nao confirmado.");
     }
     const createSale = this.db.transaction(() => {
       const cashRegister = this.ensureOpenCashRegister();
@@ -969,6 +977,9 @@ export class LocalDatabase {
         }
       });
       payments.forEach((payment) => insertPayment.run(payment));
+      if (input.pixChargeId && payments.some((payment) => payment.method === "pix")) {
+        this.pixService().linkChargeToSale(input.pixChargeId, sale.id);
+      }
 
       if (customer && storeCreditAmount > 0) {
         this.db
@@ -1195,7 +1206,8 @@ export class LocalDatabase {
         incomeTotal: 0,
         expenseTotal: 0,
         withdrawalTotal: 0,
-        expectedAmount: 0
+        expectedAmount: 0,
+        recentMovements: []
       };
     }
 
@@ -1211,13 +1223,24 @@ export class LocalDatabase {
       )
       .get(cashRegister.id) as Omit<CashSummary, "cashRegister" | "expectedAmount">;
 
+    const recentMovements = this.db
+      .prepare(
+        `SELECT id, cash_register_id as cashRegisterId, type, description, amount, created_at as createdAt
+        FROM cash_movements
+        WHERE cash_register_id = ?
+        ORDER BY created_at DESC
+        LIMIT 6`
+      )
+      .all(cashRegister.id) as CashMovement[];
+
     return {
       cashRegister,
       salesTotal: totals.salesTotal,
       incomeTotal: totals.incomeTotal,
       expenseTotal: totals.expenseTotal,
       withdrawalTotal: totals.withdrawalTotal,
-      expectedAmount: cashRegister.expectedAmount
+      expectedAmount: cashRegister.expectedAmount,
+      recentMovements
     };
   }
 
@@ -1355,6 +1378,7 @@ export class LocalDatabase {
       backupPath: backup.backupPath,
       blockNegativeStock: this.getSetting("block_negative_stock") !== "false",
       receiptWidthMm: this.getSetting("receipt_width_mm") === "58" ? 58 : 80,
+      receiptPrinterName: this.getSetting("receipt_printer_name") || "",
       receiptFooterMessage: this.getSetting("receipt_footer_message") || "Obrigado pela preferencia.",
       receiptAutoPrint: this.getSetting("receipt_auto_print") !== "false",
       company: this.getCompany(),
@@ -1715,6 +1739,7 @@ export class LocalDatabase {
     automaticBackupEnabled?: boolean;
     backupPath?: string;
     receiptWidthMm?: 58 | 80;
+    receiptPrinterName?: string;
     receiptFooterMessage?: string;
     receiptAutoPrint?: boolean;
   }): SystemState {
@@ -1747,6 +1772,11 @@ export class LocalDatabase {
       this.setSetting("receipt_width_mm", String(input.receiptWidthMm));
       this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Cupom ${input.receiptWidthMm}mm`);
     }
+    if (typeof input.receiptPrinterName === "string") {
+      const printerName = input.receiptPrinterName.trim();
+      this.setSetting("receipt_printer_name", printerName);
+      this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), printerName ? `Impressora do cupom: ${printerName}` : "Impressora do cupom removida");
+    }
     if (typeof input.receiptFooterMessage === "string") {
       this.setSetting("receipt_footer_message", input.receiptFooterMessage.trim() || "Obrigado pela preferencia.");
       this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), "Mensagem do cupom atualizada");
@@ -1756,6 +1786,14 @@ export class LocalDatabase {
       this.recordAudit("configuracoes alteradas", this.getCurrentOperatorName(), `Impressao automatica ${input.receiptAutoPrint ? "ativada" : "desativada"}`);
     }
     return this.getSystemState();
+  }
+
+  getReceiptPrintSettings(): { printerName?: string; widthMm: 58 | 80 } {
+    const printerName = this.getSetting("receipt_printer_name")?.trim();
+    return {
+      printerName: printerName || undefined,
+      widthMm: this.getSetting("receipt_width_mm") === "58" ? 58 : 80
+    };
   }
 
   getPixConfig(): PixConfig {
@@ -1773,13 +1811,27 @@ export class LocalDatabase {
     return this.pixService().createChargeMock(amount, saleId);
   }
 
+  createPixCharge(amount: number, saleId?: string): Promise<PixCharge> {
+    assertLicensedModule(this, "pix");
+    return this.pixService().createCharge(amount, saleId);
+  }
+
   getPixChargeStatusMock(chargeId: string): PixChargeStatus {
     return this.pixService().getChargeStatusMock(chargeId);
+  }
+
+  getPixCharge(chargeId: string, refreshProvider = false): Promise<PixCharge> {
+    return this.pixService().getCharge(chargeId, refreshProvider);
   }
 
   cancelPixChargeMock(chargeId: string): PixCharge {
     assertLicensedModule(this, "pix");
     return this.pixService().cancelChargeMock(chargeId);
+  }
+
+  cancelPixCharge(chargeId: string): Promise<PixCharge> {
+    assertLicensedModule(this, "pix");
+    return this.pixService().cancelCharge(chargeId);
   }
 
   confirmPixChargeMock(chargeId: string): PixCharge {
@@ -1795,6 +1847,12 @@ export class LocalDatabase {
   generateDynamicPixQrCodeMock(amount: number, saleId?: string): string {
     assertLicensedModule(this, "pix");
     return this.pixService().generateDynamicQrCodeMock(amount, saleId);
+  }
+
+  testPixConnection(): Promise<{ status: PixConnectionStatus; message: string }> {
+    this.assertCurrentPermission("configure_pix");
+    assertLicensedModule(this, "pix");
+    return this.pixService().testConnection();
   }
 
   getFiscalConfig(): FiscalConfig {
@@ -2730,8 +2788,11 @@ export class LocalDatabase {
         receiver_name TEXT,
         city TEXT,
         provider TEXT,
+        environment TEXT NOT NULL DEFAULT 'sandbox',
         api_key TEXT,
         webhook_url TEXT,
+        connection_status TEXT NOT NULL DEFAULT 'unknown',
+        last_connection_at TEXT,
         updated_at TEXT NOT NULL
       );
 
@@ -2743,6 +2804,15 @@ export class LocalDatabase {
         status TEXT NOT NULL,
         qr_code_payload TEXT NOT NULL,
         provider TEXT,
+        provider_status TEXT,
+        provider_payment_id TEXT,
+        transaction_id TEXT,
+        qr_code TEXT,
+        payload_pix TEXT,
+        paid_at TEXT,
+        pix_mode TEXT,
+        manual_confirmation INTEGER NOT NULL DEFAULT 0,
+        error_message TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         expires_at TEXT
@@ -2870,6 +2940,20 @@ export class LocalDatabase {
     addColumn("licenses", "signature", "TEXT");
     addColumn("licenses", "features_json", "TEXT");
 
+    addColumn("pix_config", "environment", "TEXT NOT NULL DEFAULT 'sandbox'");
+    addColumn("pix_config", "connection_status", "TEXT NOT NULL DEFAULT 'unknown'");
+    addColumn("pix_config", "last_connection_at", "TEXT");
+
+    addColumn("pix_charges", "provider_status", "TEXT");
+    addColumn("pix_charges", "provider_payment_id", "TEXT");
+    addColumn("pix_charges", "transaction_id", "TEXT");
+    addColumn("pix_charges", "qr_code", "TEXT");
+    addColumn("pix_charges", "payload_pix", "TEXT");
+    addColumn("pix_charges", "paid_at", "TEXT");
+    addColumn("pix_charges", "pix_mode", "TEXT");
+    addColumn("pix_charges", "manual_confirmation", "INTEGER NOT NULL DEFAULT 0");
+    addColumn("pix_charges", "error_message", "TEXT");
+
     addColumn("audit_logs", "ip", "TEXT");
     addColumn("audit_logs", "machine_id", "TEXT");
     addColumn("audit_logs", "device_name", "TEXT");
@@ -2884,6 +2968,7 @@ export class LocalDatabase {
       automatic_backup_enabled: "false",
       backup_path: this.getDefaultBackupDir(),
       receipt_width_mm: "80",
+      receipt_printer_name: "",
       receipt_footer_message: "Obrigado pela preferencia.",
       receipt_auto_print: "true"
     };

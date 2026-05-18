@@ -11,7 +11,10 @@ export type LicensePlan = "OFFLINE" | "CLOUD" | "PRO";
 export type LicenseFeature = "pix" | "fiscal" | "cloud" | "mobile" | "intelligence";
 export type PixConfigMode = "manual" | "static_qr" | "dynamic_qr";
 export type PixKeyType = "cpf" | "cnpj" | "email" | "phone" | "random";
-export type PixChargeStatus = "waiting" | "paid" | "expired" | "cancelled";
+export type PixProviderCode = "mock" | "pagbank";
+export type PixEnvironment = "sandbox" | "production";
+export type PixConnectionStatus = "connected" | "invalid" | "offline" | "sandbox" | "unknown";
+export type PixChargeStatus = "waiting" | "paid" | "expired" | "cancelled" | "error";
 export type FiscalEnvironment = "homologation" | "production";
 export type FiscalStatus = "not_issued" | "authorized" | "rejected" | "cancelled" | "contingency";
 
@@ -278,9 +281,12 @@ export interface PixConfig {
   keyType: PixKeyType;
   receiverName: string;
   city: string;
-  provider?: string;
+  provider?: PixProviderCode | string;
+  environment?: PixEnvironment;
   apiKey?: string;
   webhookUrl?: string;
+  connectionStatus?: PixConnectionStatus;
+  lastConnectionAt?: string;
   updatedAt: string;
 }
 
@@ -291,20 +297,27 @@ export interface PixCharge {
   amount: number;
   status: PixChargeStatus;
   qrCodePayload: string;
-  provider?: string;
+  provider?: PixProviderCode | string;
+  providerStatus?: string;
+  providerPaymentId?: string;
+  transactionId?: string;
+  qrCode?: string;
+  payloadPix?: string;
+  paidAt?: string;
+  pixMode?: PixConfigMode;
+  manualConfirmation?: boolean;
+  errorMessage?: string;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
 }
 
 export interface PixProvider {
-  getPixConfig(): Promise<PixConfig>;
-  savePixConfig(config: Partial<PixConfig>): Promise<PixConfig>;
-  createChargeMock(amount: number, saleId?: string): Promise<PixCharge>;
-  getChargeStatusMock(chargeId: string): Promise<PixChargeStatus>;
-  cancelChargeMock(chargeId: string): Promise<PixCharge>;
-  generateStaticQrCodePayload(config?: Partial<PixConfig>): Promise<string>;
-  generateDynamicQrCodeMock(amount: number, saleId?: string): Promise<PixCharge>;
+  code: PixProviderCode | string;
+  createCharge(amount: number, saleId?: string): Promise<PixCharge>;
+  getChargeStatus(charge: PixCharge): Promise<PixCharge>;
+  cancelCharge(charge: PixCharge): Promise<PixCharge>;
+  testConnection(): Promise<{ status: PixConnectionStatus; message: string }>;
 }
 
 export interface FiscalConfig {

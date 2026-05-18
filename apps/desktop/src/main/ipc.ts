@@ -2,7 +2,18 @@ import { ipcMain } from "electron";
 import type { LocalDatabase } from "./localDatabase";
 import type { SyncEngine } from "./syncEngine";
 import { assertLicensedModule, checkLocalLicense } from "./licenseService";
-import { printReceipt } from "./receiptPrinter";
+import { listThermalPrinters, openCashDrawer, printReceipt, printTestReceipt, type ReceiptPrintContext } from "./receiptPrinter";
+
+interface ReceiptPrintRequest {
+  html: string;
+  context?: ReceiptPrintContext;
+}
+
+const printAuditLabel = (context?: ReceiptPrintContext): string => {
+  if (context?.reason === "reprint") return "comprovante reimpresso";
+  if (context?.reason === "test") return "teste impressao executado";
+  return "comprovante impresso";
+};
 
 export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void => {
   ipcMain.handle("dashboard:get", () => db.getDashboard());
@@ -67,6 +78,10 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("system:backup-restore", (_event, filePath: string) => db.restoreLocalBackup(filePath));
   ipcMain.handle("pix:config", () => db.getPixConfig());
   ipcMain.handle("pix:save-config", (_event, input) => db.savePixConfig(input));
+  ipcMain.handle("pix:test-connection", () => db.testPixConnection());
+  ipcMain.handle("pix:create-charge", (_event, input) => db.createPixCharge(input.amount, input.saleId));
+  ipcMain.handle("pix:charge", (_event, input) => (typeof input === "string" ? db.getPixCharge(input, true) : db.getPixCharge(input.chargeId, input.refreshProvider ?? true)));
+  ipcMain.handle("pix:cancel-charge", (_event, chargeId: string) => db.cancelPixCharge(chargeId));
   ipcMain.handle("pix:create-charge-mock", (_event, input) => db.createPixChargeMock(input.amount, input.saleId));
   ipcMain.handle("pix:charge-status-mock", (_event, chargeId: string) => db.getPixChargeStatusMock(chargeId));
   ipcMain.handle("pix:cancel-charge-mock", (_event, chargeId: string) => db.cancelPixChargeMock(chargeId));
@@ -79,5 +94,27 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("fiscal:issue-nfce-mock", (_event, saleId: string) => db.issueNfceMock(saleId));
   ipcMain.handle("fiscal:cancel-document-mock", (_event, documentId: string) => db.cancelFiscalDocumentMock(documentId));
   ipcMain.handle("fiscal:status-mock", (_event, documentId: string) => db.getFiscalStatusMock(documentId));
-  ipcMain.handle("receipt:print", (_event, html: string) => printReceipt(html));
+  ipcMain.handle("printers:list", () => listThermalPrinters());
+  ipcMain.handle("printers:test", async (_event, input?: { printerName?: string; widthMm?: 58 | 80 }) => {
+    const settings = { ...db.getReceiptPrintSettings(), ...input };
+    await printTestReceipt(settings);
+    db.recordAuditEvent({ action: "teste impressao executado", details: settings.printerName || "impressora padrao" });
+    return { ok: true };
+  });
+  ipcMain.handle("printers:open-drawer", async (_event, input?: { printerName?: string; widthMm?: 58 | 80 }) => {
+    const settings = { ...db.getReceiptPrintSettings(), ...input };
+    const result = await openCashDrawer(settings);
+    db.recordAuditEvent({ action: "gaveta aberta", details: settings.printerName || "impressora padrao" });
+    return result;
+  });
+  ipcMain.handle("receipt:print", async (_event, input: string | ReceiptPrintRequest) => {
+    const html = typeof input === "string" ? input : input.html;
+    const context = typeof input === "string" ? undefined : input.context;
+    await printReceipt(html, db.getReceiptPrintSettings(), context);
+    db.recordAuditEvent({
+      action: printAuditLabel(context),
+      details: context?.saleNumber || context?.saleId || db.getReceiptPrintSettings().printerName || "impressora padrao"
+    });
+    return { ok: true };
+  });
 };

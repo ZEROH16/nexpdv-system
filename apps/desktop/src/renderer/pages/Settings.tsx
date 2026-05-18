@@ -26,7 +26,8 @@ const emptyPixForm: Partial<PixConfig> = {
   keyType: "random",
   receiverName: "",
   city: "",
-  provider: "",
+  provider: "mock",
+  environment: "sandbox",
   apiKey: "",
   webhookUrl: ""
 };
@@ -78,6 +79,7 @@ export const Settings = () => {
     allowSalesWithoutCashRegister: false,
     blockNegativeStock: true,
     receiptWidthMm: 80 as 58 | 80,
+    receiptPrinterName: "",
     receiptFooterMessage: "Obrigado pela preferencia.",
     receiptAutoPrint: true
   });
@@ -95,6 +97,7 @@ export const Settings = () => {
   });
   const [syncMessage, setSyncMessage] = useState<string>();
   const [message, setMessage] = useState<string>();
+  const [pixTesting, setPixTesting] = useState(false);
   const { data: license, refresh: refreshLicense } = useAsync(() => desktopApi.license.check(), []);
   const { data: systemState, refresh: refreshSystem } = useAsync(() => desktopApi.system.state(), []);
   const { data: backupState, refresh: refreshBackup } = useAsync(() => desktopApi.system.backupState(), []);
@@ -102,6 +105,7 @@ export const Settings = () => {
   const { data: fiscalConfig, refresh: refreshFiscal } = useAsync(() => desktopApi.fiscal.getFiscalConfig(), []);
   const { data: security } = useAsync(() => desktopApi.system.security(), []);
   const { data: securitySettings, refresh: refreshSecuritySettings } = useAsync(() => desktopApi.auth.securitySettings(), []);
+  const { data: printers, error: printersError, refresh: refreshPrinters } = useAsync(() => desktopApi.printers.list(), []);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -123,6 +127,7 @@ export const Settings = () => {
         allowSalesWithoutCashRegister: systemState.allowSalesWithoutCashRegister ?? false,
         blockNegativeStock: systemState.blockNegativeStock ?? true,
         receiptWidthMm: systemState.receiptWidthMm ?? 80,
+        receiptPrinterName: systemState.receiptPrinterName ?? "",
         receiptFooterMessage: systemState.receiptFooterMessage ?? current.receiptFooterMessage,
         receiptAutoPrint: systemState.receiptAutoPrint ?? true
       }));
@@ -205,6 +210,7 @@ export const Settings = () => {
         allowSalesWithoutCashRegister: backupForm.allowSalesWithoutCashRegister,
         blockNegativeStock: backupForm.blockNegativeStock,
         receiptWidthMm: backupForm.receiptWidthMm,
+        receiptPrinterName: backupForm.receiptPrinterName,
         receiptFooterMessage: backupForm.receiptFooterMessage,
         receiptAutoPrint: backupForm.receiptAutoPrint
       });
@@ -213,6 +219,24 @@ export const Settings = () => {
       refreshBackup();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar as configuracoes.");
+    }
+  };
+
+  const testPrint = async () => {
+    try {
+      await desktopApi.printers.test({ printerName: backupForm.receiptPrinterName, widthMm: backupForm.receiptWidthMm });
+      setMessage("Teste de impressao enviado para a impressora.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel testar a impressao.");
+    }
+  };
+
+  const openDrawer = async () => {
+    try {
+      await desktopApi.printers.openDrawer({ printerName: backupForm.receiptPrinterName, widthMm: backupForm.receiptWidthMm });
+      setMessage("Comando de abertura da gaveta enviado.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel abrir a gaveta.");
     }
   };
 
@@ -240,7 +264,6 @@ export const Settings = () => {
   const savePix = async () => {
     try {
       await desktopApi.pix.savePixConfig(pixForm);
-      await desktopApi.system.auditEvent({ action: "teste Pix executado", details: "Configuracao salva via aba Pix" });
       setMessage("Configuracao Pix salva.");
       refreshPix();
     } catch (error) {
@@ -249,12 +272,16 @@ export const Settings = () => {
   };
 
   const testPix = async () => {
+    setPixTesting(true);
     try {
-      const charge = await desktopApi.pix.createChargeMock({ amount: 1 });
-      setMessage(`Teste Pix executado. Cobranca mock: ${charge.id}`);
+      await desktopApi.pix.savePixConfig(pixForm);
+      const result = await desktopApi.pix.testConnection();
+      setMessage(`Teste Pix: ${result.message}`);
       refreshPix();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Nao foi possivel testar o Pix.");
+    } finally {
+      setPixTesting(false);
     }
   };
 
@@ -405,6 +432,21 @@ export const Settings = () => {
             <div className="rounded-lg border border-slate-200 p-4 dark:border-slate-800">
               <h3 className="text-sm font-black uppercase text-slate-500">Cupom / comprovante</h3>
               <div className="mt-3 grid grid-cols-3 gap-3">
+                <label className="col-span-3 text-sm font-semibold">
+                  Impressora do cupom
+                  <select
+                    className="field mt-1 w-full"
+                    value={backupForm.receiptPrinterName}
+                    onChange={(event) => setBackupForm({ ...backupForm, receiptPrinterName: event.target.value })}
+                  >
+                    <option value="">Usar impressora padrao do Windows</option>
+                    {(printers ?? []).map((printer) => (
+                      <option key={printer.name} value={printer.name}>
+                        {printer.displayName || printer.name}{printer.isDefault ? " (padrao)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="text-sm font-semibold">
                   Largura
                   <select className="field mt-1 w-full" value={backupForm.receiptWidthMm} onChange={(event) => setBackupForm({ ...backupForm, receiptWidthMm: Number(event.target.value) as 58 | 80 })}>
@@ -420,6 +462,14 @@ export const Settings = () => {
                   <input type="checkbox" checked={backupForm.receiptAutoPrint} onChange={(event) => setBackupForm({ ...backupForm, receiptAutoPrint: event.target.checked })} />
                   Imprimir automaticamente ao finalizar venda
                 </label>
+                <div className="col-span-3 flex flex-wrap gap-2">
+                  <Button variant="secondary" onClick={() => refreshPrinters()}><RefreshCcw size={16} />Atualizar impressoras</Button>
+                  <Button variant="secondary" onClick={testPrint}>Testar impressao</Button>
+                  <Button variant="secondary" onClick={openDrawer}>Abrir gaveta</Button>
+                </div>
+                <div className="col-span-3 text-xs text-slate-500">
+                  {printersError ? printersError : `${printers?.length ?? 0} impressora(s) detectada(s). A gaveta usa ESC/POS raw quando a impressora estiver compartilhada em caminho de rede.`}
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
@@ -442,18 +492,42 @@ export const Settings = () => {
             </div>
             <div className="mt-4 grid grid-cols-2 gap-3">
               <label className="flex items-center gap-2 text-sm font-semibold"><input type="checkbox" checked={pixForm.enabled ?? false} onChange={(event) => setPixForm({ ...pixForm, enabled: event.target.checked })} />Ativar Pix</label>
+              <label className="text-sm font-semibold">Provider<select className="field mt-1 w-full" value={pixForm.provider ?? "mock"} onChange={(event) => setPixForm({ ...pixForm, provider: event.target.value })}><option value="mock">MOCK</option><option value="pagbank">PAGBANK</option></select></label>
               <label className="text-sm font-semibold">Tipo<select className="field mt-1 w-full" value={pixForm.mode ?? "manual"} onChange={(event) => setPixForm({ ...pixForm, mode: event.target.value as PixConfig["mode"] })}><option value="manual">Manual</option><option value="static_qr">QR estatico</option><option value="dynamic_qr">QR dinamico futuro</option></select></label>
+              <label className="text-sm font-semibold">Ambiente<select className="field mt-1 w-full" value={pixForm.environment ?? "sandbox"} onChange={(event) => setPixForm({ ...pixForm, environment: event.target.value as PixConfig["environment"] })}><option value="sandbox">Sandbox</option><option value="production">Producao</option></select></label>
               <label className="text-sm font-semibold">Chave Pix<input className="field mt-1 w-full" value={pixForm.key ?? ""} onChange={(event) => setPixForm({ ...pixForm, key: event.target.value })} /></label>
               <label className="text-sm font-semibold">Tipo da chave<select className="field mt-1 w-full" value={pixForm.keyType ?? "random"} onChange={(event) => setPixForm({ ...pixForm, keyType: event.target.value as PixConfig["keyType"] })}><option value="cpf">CPF</option><option value="cnpj">CNPJ</option><option value="email">Email</option><option value="phone">Telefone</option><option value="random">Aleatoria</option></select></label>
               <label className="text-sm font-semibold">Nome do recebedor<input className="field mt-1 w-full" value={pixForm.receiverName ?? ""} onChange={(event) => setPixForm({ ...pixForm, receiverName: event.target.value })} /></label>
               <label className="text-sm font-semibold">Cidade<input className="field mt-1 w-full" value={pixForm.city ?? ""} onChange={(event) => setPixForm({ ...pixForm, city: event.target.value })} /></label>
-              <label className="text-sm font-semibold">Banco/gateway futuro<input className="field mt-1 w-full" value={pixForm.provider ?? ""} onChange={(event) => setPixForm({ ...pixForm, provider: event.target.value })} /></label>
-              <label className="text-sm font-semibold">Token/API Key futuro<input className="field mt-1 w-full" value={pixForm.apiKey ?? ""} onChange={(event) => setPixForm({ ...pixForm, apiKey: event.target.value })} /></label>
+              {pixForm.provider === "pagbank" ? (
+                <label className="col-span-2 text-sm font-semibold">
+                  Token PagBank
+                  <input
+                    className="field mt-1 w-full"
+                    type="password"
+                    value={pixForm.apiKey ?? ""}
+                    placeholder="Token sandbox ou producao"
+                    onChange={(event) => setPixForm({ ...pixForm, apiKey: event.target.value })}
+                  />
+                  <span className="mt-1 block text-xs text-slate-500">O token e mascarado na interface. Se estiver configurado por ambiente, ele sera usado sem aparecer aqui.</span>
+                </label>
+              ) : null}
               <label className="col-span-2 text-sm font-semibold">Webhook URL futura<input className="field mt-1 w-full" value={pixForm.webhookUrl ?? ""} onChange={(event) => setPixForm({ ...pixForm, webhookUrl: event.target.value })} /></label>
+              <div className="col-span-2 rounded-lg bg-slate-50 p-4 text-sm dark:bg-slate-900">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold">Status da conexao</span>
+                  <StatusBadge tone={pixForm.connectionStatus === "connected" || pixForm.connectionStatus === "sandbox" ? "green" : pixForm.connectionStatus === "invalid" ? "red" : "slate"}>
+                    {pixForm.connectionStatus ?? "unknown"}
+                  </StatusBadge>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  {pixForm.lastConnectionAt ? `Ultimo teste: ${new Date(pixForm.lastConnectionAt).toLocaleString("pt-BR")}` : "Nenhum teste executado."}
+                </div>
+              </div>
             </div>
             <div className="mt-5 flex gap-3">
               <Button onClick={savePix}>Salvar Pix</Button>
-              <Button variant="secondary" onClick={testPix}>Testar Pix</Button>
+              <Button variant="secondary" disabled={pixTesting} onClick={testPix}>{pixTesting ? "Testando..." : "Testar conexao"}</Button>
             </div>
           </section>
         ) : <LockedFeature title="Pix" />

@@ -84,6 +84,10 @@ contextBridge.exposeInMainWorld("nexpdv", {
   pix: {
     config: () => invoke("pix:config"),
     saveConfig: (input: unknown) => invoke("pix:save-config", input),
+    testConnection: () => invoke("pix:test-connection"),
+    createCharge: (input: unknown) => invoke("pix:create-charge", input),
+    charge: (input: unknown) => invoke("pix:charge", input),
+    cancelCharge: (chargeId: string) => invoke("pix:cancel-charge", chargeId),
     createChargeMock: (input: unknown) => invoke("pix:create-charge-mock", input),
     chargeStatusMock: (chargeId: string) => invoke("pix:charge-status-mock", chargeId),
     cancelChargeMock: (chargeId: string) => invoke("pix:cancel-charge-mock", chargeId),
@@ -99,7 +103,12 @@ contextBridge.exposeInMainWorld("nexpdv", {
     cancelDocumentMock: (documentId: string) => invoke("fiscal:cancel-document-mock", documentId),
     statusMock: (documentId: string) => invoke("fiscal:status-mock", documentId)
   },
+  printers: {
+    list: () => invoke("printers:list"),
+    test: (input: unknown) => invoke("printers:test", input),
+    openDrawer: (input: unknown) => invoke("printers:open-drawer", input)
+  },
   receipt: {
-    print: (html: string) => invoke("receipt:print", html)
+    print: (input: unknown) => invoke("receipt:print", input)
   }
 });
