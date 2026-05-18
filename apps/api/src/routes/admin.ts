@@ -13,7 +13,7 @@ export const adminRoutes = async (app: FastifyInstance) => {
     app.prisma.company.findMany({
       include: {
         licenses: true,
-        plans: { include: { plan: true } },
+        subscriptions: { include: { plan: true } },
         _count: { select: { users: true, products: true, sales: true } }
       },
       orderBy: { createdAt: "desc" }

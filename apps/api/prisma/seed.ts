@@ -4,14 +4,112 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 const margin = (cost: number, price: number) => (price <= 0 ? 0 : Number((((price - cost) / price) * 100).toFixed(2)));
+const features = (input: { pix?: boolean; fiscal?: boolean; cloud?: boolean; mobile?: boolean; intelligence?: boolean }) =>
+  JSON.stringify({
+    pix: Boolean(input.pix),
+    fiscal: Boolean(input.fiscal),
+    cloud: Boolean(input.cloud),
+    mobile: Boolean(input.mobile),
+    intelligence: Boolean(input.intelligence)
+  });
 
 async function main() {
   const passwordHash = await bcrypt.hash("123456", 10);
+  const tenant = await prisma.tenant.upsert({
+    where: { slug: "nexpdv" },
+    update: { status: "active" },
+    create: {
+      id: "ten_nexpdv",
+      name: "NexPDV SaaS",
+      slug: "nexpdv",
+      status: "active"
+    }
+  });
+
+  const offlinePlan = await prisma.plan.upsert({
+    where: { code: "OFFLINE" },
+    update: {
+      tenantId: tenant.id,
+      name: "NexPDV Offline",
+      description: "PDV local offline-first sem cloud.",
+      price: 79.9,
+      maxStores: 1,
+      maxUsers: 3,
+      maxDevices: 1,
+      featuresJson: features({})
+    },
+    create: {
+      id: "plan_offline",
+      tenantId: tenant.id,
+      code: "OFFLINE",
+      name: "NexPDV Offline",
+      description: "PDV local offline-first sem cloud.",
+      price: 79.9,
+      maxStores: 1,
+      maxUsers: 3,
+      maxDevices: 1,
+      featuresJson: features({})
+    }
+  });
+
+  const cloudPlan = await prisma.plan.upsert({
+    where: { code: "CLOUD" },
+    update: {
+      tenantId: tenant.id,
+      name: "NexPDV Cloud",
+      description: "Cloud, mobile gerencial e sincronizacao.",
+      price: 129.9,
+      maxStores: 2,
+      maxUsers: 10,
+      maxDevices: 3,
+      featuresJson: features({ cloud: true, mobile: true })
+    },
+    create: {
+      id: "plan_cloud",
+      tenantId: tenant.id,
+      code: "CLOUD",
+      name: "NexPDV Cloud",
+      description: "Cloud, mobile gerencial e sincronizacao.",
+      price: 129.9,
+      maxStores: 2,
+      maxUsers: 10,
+      maxDevices: 3,
+      featuresJson: features({ cloud: true, mobile: true })
+    }
+  });
+
+  const proPlan = await prisma.plan.upsert({
+    where: { code: "PRO" },
+    update: {
+      tenantId: tenant.id,
+      name: "NexPDV Pro",
+      description: "Pix, Fiscal mock, Cloud, Mobile e Intelligence.",
+      price: 199.9,
+      maxStores: 5,
+      maxUsers: 25,
+      maxDevices: 8,
+      featuresJson: features({ pix: true, fiscal: true, cloud: true, mobile: true, intelligence: true })
+    },
+    create: {
+      id: "plan_pro",
+      tenantId: tenant.id,
+      code: "PRO",
+      name: "NexPDV Pro",
+      description: "Pix, Fiscal mock, Cloud, Mobile e Intelligence.",
+      price: 199.9,
+      maxStores: 5,
+      maxUsers: 25,
+      maxDevices: 8,
+      featuresJson: features({ pix: true, fiscal: true, cloud: true, mobile: true, intelligence: true })
+    }
+  });
+
   const company = await prisma.company.upsert({
     where: { id: "cmp_nexpdv_demo" },
-    update: {},
+    update: { tenantId: tenant.id, status: "active" },
     create: {
       id: "cmp_nexpdv_demo",
+      tenantId: tenant.id,
       name: "NexPDV Comercio Demo LTDA",
       tradeName: "NexPDV Store",
       document: "12.345.678/0001-90",
@@ -23,22 +121,25 @@ async function main() {
 
   await prisma.user.upsert({
     where: { email: "admin@nexpdv.com.br" },
-    update: { passwordHash },
+    update: { passwordHash, tenantId: tenant.id, platformRole: "super_admin" },
     create: {
       id: "usr_admin_demo",
+      tenantId: tenant.id,
       companyId: company.id,
       name: "Administrador NexPDV",
       email: "admin@nexpdv.com.br",
       passwordHash,
-      role: "owner"
+      role: "owner",
+      platformRole: "super_admin"
     }
   });
 
   await prisma.user.upsert({
     where: { email: "operador@nexpdv.com.br" },
-    update: { passwordHash },
+    update: { passwordHash, tenantId: tenant.id },
     create: {
       id: "usr_operador_demo",
+      tenantId: tenant.id,
       companyId: company.id,
       name: "Operador Caixa",
       email: "operador@nexpdv.com.br",
@@ -110,33 +211,113 @@ async function main() {
 
   await prisma.license.upsert({
     where: { key: "NEXPDV-2026" },
-    update: { status: "active" },
+    update: { status: "active", planId: offlinePlan.id, planCode: "OFFLINE", featuresJson: offlinePlan.featuresJson, maxDevices: offlinePlan.maxDevices },
     create: {
       companyId: company.id,
+      planId: offlinePlan.id,
       key: "NEXPDV-2026",
+      planCode: "OFFLINE",
       status: "active",
       validUntil: new Date("2027-12-31T23:59:59.000Z"),
+      offlineGraceUntil: new Date("2028-01-30T23:59:59.000Z"),
       demoMode: false,
+      featuresJson: offlinePlan.featuresJson,
+      maxDevices: offlinePlan.maxDevices,
+      activatedAt: new Date(),
+      lastValidatedAt: new Date(),
+      lastSyncedAt: new Date()
+    }
+  });
+
+  await prisma.license.upsert({
+    where: { key: "NEXPDV-CLOUD-2026" },
+    update: { status: "active", planId: cloudPlan.id, planCode: "CLOUD", featuresJson: cloudPlan.featuresJson, maxDevices: cloudPlan.maxDevices },
+    create: {
+      companyId: company.id,
+      planId: cloudPlan.id,
+      key: "NEXPDV-CLOUD-2026",
+      planCode: "CLOUD",
+      status: "active",
+      validUntil: new Date("2027-12-31T23:59:59.000Z"),
+      offlineGraceUntil: new Date("2028-01-30T23:59:59.000Z"),
+      demoMode: false,
+      featuresJson: cloudPlan.featuresJson,
+      maxDevices: cloudPlan.maxDevices,
       activatedAt: new Date()
     }
   });
 
-  const plan = await prisma.plan.upsert({
-    where: { id: "plan_pro" },
-    update: {},
-    create: { id: "plan_pro", name: "NexPDV Pro", price: 149.9, maxStores: 3, maxUsers: 15 }
+  await prisma.license.upsert({
+    where: { key: "NEXPDV-PRO-2026" },
+    update: { status: "active", planId: proPlan.id, planCode: "PRO", featuresJson: proPlan.featuresJson, maxDevices: proPlan.maxDevices },
+    create: {
+      companyId: company.id,
+      planId: proPlan.id,
+      key: "NEXPDV-PRO-2026",
+      planCode: "PRO",
+      status: "active",
+      validUntil: new Date("2027-12-31T23:59:59.000Z"),
+      offlineGraceUntil: new Date("2028-01-30T23:59:59.000Z"),
+      demoMode: false,
+      featuresJson: proPlan.featuresJson,
+      maxDevices: proPlan.maxDevices,
+      activatedAt: new Date()
+    }
   });
 
   await prisma.subscription.upsert({
     where: { id: "sub_demo" },
-    update: { status: "active" },
+    update: { status: "active", planId: proPlan.id },
     create: {
       id: "sub_demo",
       companyId: company.id,
-      planId: plan.id,
+      planId: proPlan.id,
       status: "active",
       startsAt: new Date(),
       endsAt: new Date("2027-12-31T23:59:59.000Z")
+    }
+  });
+
+  await prisma.device.upsert({
+    where: { companyId_deviceId: { companyId: company.id, deviceId: "dev_demo_desktop" } },
+    update: { status: "active", online: false, lastSeenAt: new Date(), appVersion: "0.1.0" },
+    create: {
+      id: "dev_demo_desktop",
+      companyId: company.id,
+      licenseId: (await prisma.license.findUniqueOrThrow({ where: { key: "NEXPDV-PRO-2026" } })).id,
+      deviceId: "dev_demo_desktop",
+      name: "PDV Caixa Demo",
+      fingerprint: "demo-fingerprint",
+      appVersion: "0.1.0",
+      platform: "desktop",
+      status: "active",
+      online: false,
+      lastSeenAt: new Date()
+    }
+  });
+
+  await prisma.syncJob.upsert({
+    where: { id: "syncjob_seed_products" },
+    update: { status: "pending" },
+    create: {
+      id: "syncjob_seed_products",
+      companyId: company.id,
+      deviceId: "dev_demo_desktop",
+      entity: "products",
+      operation: "pull",
+      status: "pending",
+      payload: JSON.stringify({ reason: "seed" })
+    }
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      tenantId: tenant.id,
+      userId: "usr_admin_demo",
+      action: "seed saas inicial",
+      entity: "tenant",
+      entityId: tenant.id,
+      details: "Estrutura SaaS central NexPDV preparada."
     }
   });
 }

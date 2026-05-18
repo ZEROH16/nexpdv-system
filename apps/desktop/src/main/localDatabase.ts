@@ -30,6 +30,7 @@ import {
   type SaleItem,
   type SyncQueueItem
 } from "@nexpdv/shared";
+import { activateLicenseOnline } from "./cloudLicenseService";
 import { FiscalService } from "./fiscalService";
 import { assertLicensedModule, checkStoredLicense, createLocalLicenseActivation, normalizeStoredLicense, serializeFeatures, type LocalLicenseRecord } from "./licenseService";
 import { adminRoleCodes, hashPassword, hashPin, legacyHashPassword, managerRoleCodes, normalizeLogin, PERMISSIONS, permissionLabels, type PermissionKey } from "./permissionService";
@@ -1386,10 +1387,23 @@ export class LocalDatabase {
     };
   }
 
-  activateSystem(input: ActivationInput): SystemState {
+  async activateSystem(input: ActivationInput): Promise<SystemState> {
     this.assertCurrentPermission("activate_license");
     const timestamp = now();
-    const license = createLocalLicenseActivation(input, COMPANY_ID, timestamp);
+    let license: LocalLicenseRecord;
+    let activationMode: "online" | "local" = "local";
+    try {
+      const onlineLicense = await activateLicenseOnline(input, COMPANY_ID);
+      if (onlineLicense) {
+        license = onlineLicense;
+        activationMode = "online";
+      } else {
+        license = createLocalLicenseActivation(input, COMPANY_ID, timestamp);
+      }
+    } catch (error) {
+      this.recordAudit("ativacao online indisponivel", input.ownerEmail.trim(), error instanceof Error ? error.message : "falha desconhecida");
+      license = createLocalLicenseActivation(input, COMPANY_ID, timestamp);
+    }
     this.db
       .prepare(
         `UPDATE companies SET trade_name = @tradeName, name = @name, owner_email = @ownerEmail,
@@ -1399,7 +1413,7 @@ export class LocalDatabase {
     this.saveLicenseRecord(license);
     this.setSetting("system_activated", "true");
     this.setSetting("cloud_enabled", String(license.features.cloud));
-    this.recordAudit("licenca ativada", license.ownerEmail, `${license.plan}: ${license.key}`);
+    this.recordAudit("licenca ativada", license.ownerEmail, `${activationMode}: ${license.plan}: ${license.key}`);
     this.recordAudit("sistema ativado", license.ownerEmail, license.establishmentName);
     return this.getSystemState();
   }

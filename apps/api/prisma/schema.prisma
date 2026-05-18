@@ -2,13 +2,31 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// Desenvolvimento local usa SQLite para manter o projeto executavel sem PostgreSQL.
+// Em producao, a mesma modelagem foi desenhada para PostgreSQL Cloud e pode ser
+// migrada trocando o provider para "postgresql" e DATABASE_URL para a URL cloud.
 datasource db {
   provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  companies Company[]
+  users     User[]
+  plans     Plan[]
+  auditLogs AuditLog[]
+}
+
 model Company {
   id        String   @id @default(cuid())
+  tenantId  String?
   name      String
   document  String
   tradeName String?
@@ -16,9 +34,11 @@ model Company {
   email     String?
   address   String?
   logoUrl   String?
+  status    String   @default("active")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  tenant        Tenant?        @relation(fields: [tenantId], references: [id])
   users         User[]
   products      Product[]
   categories    Category[]
@@ -27,23 +47,36 @@ model Company {
   cashRegisters CashRegister[]
   settings      Setting[]
   licenses      License[]
-  plans         Subscription[]
+  subscriptions Subscription[]
+  devices       Device[]
   deviceTokens  DeviceToken[]
+  syncJobs      SyncJob[]
+
+  @@index([tenantId])
+  @@index([status])
 }
 
 model User {
-  id           String   @id @default(cuid())
-  companyId    String
-  name         String
-  email        String   @unique
-  passwordHash String
-  role         String   @default("cashier")
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               String   @id @default(cuid())
+  tenantId         String?
+  companyId        String
+  name             String
+  email            String   @unique
+  passwordHash     String
+  role             String   @default("cashier")
+  platformRole     String   @default("company_user")
+  active           Boolean  @default(true)
+  refreshTokenHash String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id])
-  sales   Sale[]
+  tenant    Tenant?    @relation(fields: [tenantId], references: [id])
+  company   Company    @relation(fields: [companyId], references: [id])
+  sales     Sale[]
+  auditLogs AuditLog[]
+
+  @@index([tenantId])
+  @@index([companyId])
 }
 
 model Category {
@@ -199,28 +232,51 @@ model Setting {
 }
 
 model License {
-  id          String    @id @default(cuid())
-  companyId   String
-  key         String    @unique
-  status      String    @default("trial")
-  validUntil  DateTime
-  demoMode    Boolean   @default(true)
-  activatedAt DateTime?
+  id                String    @id @default(cuid())
+  companyId         String
+  planId            String?
+  key               String    @unique
+  planCode          String    @default("OFFLINE")
+  status            String    @default("trial")
+  validUntil        DateTime
+  offlineGraceUntil DateTime?
+  demoMode          Boolean   @default(true)
+  featuresJson      String    @default("{}")
+  maxDevices        Int       @default(1)
+  activatedAt       DateTime?
+  lastValidatedAt   DateTime?
+  lastSyncedAt      DateTime?
+  blockedReason     String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id])
+  company Company  @relation(fields: [companyId], references: [id])
+  plan    Plan?    @relation(fields: [planId], references: [id])
+  devices Device[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([validUntil])
 }
 
 model Plan {
-  id        String   @id @default(cuid())
-  name      String
-  price     Float
-  maxStores Int
-  maxUsers  Int
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String   @id @default(cuid())
+  tenantId     String?
+  code         String   @unique
+  name         String
+  description  String?
+  price        Float
+  maxStores    Int
+  maxUsers     Int
+  maxDevices   Int      @default(1)
+  featuresJson String   @default("{}")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
+  tenant        Tenant?        @relation(fields: [tenantId], references: [id])
   subscriptions Subscription[]
+  licenses      License[]
 }
 
 model Subscription {
@@ -235,6 +291,58 @@ model Subscription {
 
   company Company @relation(fields: [companyId], references: [id])
   plan    Plan    @relation(fields: [planId], references: [id])
+
+  @@index([companyId])
+  @@index([status])
+}
+
+model Device {
+  id            String    @id @default(cuid())
+  companyId     String
+  licenseId     String?
+  deviceId      String
+  name          String
+  fingerprint   String
+  appVersion    String?
+  platform      String    @default("desktop")
+  status        String    @default("active")
+  online        Boolean   @default(false)
+  lastSeenAt    DateTime?
+  activatedAt   DateTime  @default(now())
+  deactivatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  license  License?  @relation(fields: [licenseId], references: [id])
+  syncJobs SyncJob[]
+
+  @@unique([companyId, deviceId])
+  @@index([companyId, status])
+}
+
+model SyncJob {
+  id          String    @id @default(cuid())
+  companyId   String
+  deviceId    String?
+  entity      String
+  entityId    String?
+  operation   String
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  conflict    Boolean   @default(false)
+  payload     String?
+  lastError   String?
+  scheduledAt DateTime  @default(now())
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  device  Device? @relation(fields: [deviceId], references: [id])
+
+  @@index([companyId, status])
+  @@index([deviceId])
 }
 
 model SyncLog {
@@ -253,7 +361,7 @@ model SyncLog {
 model DeviceToken {
   id        String   @id @default(cuid())
   companyId String
-  userId    String
+  userId    String?
   token     String   @unique
   platform  String
   active    Boolean  @default(true)
@@ -261,4 +369,23 @@ model DeviceToken {
   updatedAt DateTime @updatedAt
 
   company Company @relation(fields: [companyId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  userId    String?
+  action    String
+  entity    String?
+  entityId  String?
+  details   String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([action])
 }

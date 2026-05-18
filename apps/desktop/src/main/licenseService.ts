@@ -22,6 +22,20 @@ export interface LocalLicenseRecord extends License {
   signature: string;
 }
 
+export interface OnlineLicenseActivation {
+  id?: string;
+  key: string;
+  plan: LicensePlan;
+  status: LicenseStatus;
+  validUntil: string;
+  demoMode?: boolean;
+  features: LicenseFeatures;
+  ownerEmail?: string;
+  establishmentName?: string;
+  activatedAt?: string;
+  lastValidatedAt?: string;
+}
+
 export const disabledFeatures = (): LicenseFeatures => ({
   pix: false,
   fiscal: false,
@@ -190,6 +204,44 @@ export const createLocalLicenseActivation = (input: LicenseActivationInput, comp
     validationMode: "local"
   };
 
+  return {
+    ...unsigned,
+    signature: signLicense(unsigned)
+  };
+};
+
+export const createOnlineLicenseActivation = (
+  input: LicenseActivationInput,
+  online: OnlineLicenseActivation,
+  companyId: string,
+  timestamp = new Date().toISOString()
+): LocalLicenseRecord => {
+  if (!validEmail(input.ownerEmail)) throw new Error("Informe um email de dono valido.");
+  const features = {
+    ...disabledFeatures(),
+    ...online.features
+  };
+  const unsigned: Omit<LocalLicenseRecord, "signature"> = {
+    id: online.id || "lic_online",
+    companyId,
+    key: normalizeKey(online.key),
+    plan: online.plan,
+    status: online.status,
+    validUntil: online.validUntil,
+    demoMode: Boolean(online.demoMode),
+    features,
+    cloudEnabled: features.cloud,
+    fiscalEnabled: features.fiscal,
+    pixEnabled: features.pix,
+    mobileEnabled: features.mobile,
+    intelligenceEnabled: features.intelligence,
+    ownerEmail: online.ownerEmail || input.ownerEmail.trim().toLowerCase(),
+    establishmentName: online.establishmentName || input.companyName.trim(),
+    issuedAt: timestamp,
+    activatedAt: online.activatedAt || timestamp,
+    lastValidatedAt: online.lastValidatedAt || timestamp,
+    validationMode: "online"
+  };
   return {
     ...unsigned,
     signature: signLicense(unsigned)

@@ -1,9 +1,10 @@
 import jwt from "@fastify/jwt";
 import type { FastifyInstance } from "fastify";
+import { config } from "../config.js";
 
 export const registerAuth = async (app: FastifyInstance) => {
   await app.register(jwt, {
-    secret: process.env.JWT_SECRET ?? "nexpdv-dev-secret"
+    secret: config.JWT_SECRET
   });
 
   app.decorate("authenticate", async (request, reply) => {
