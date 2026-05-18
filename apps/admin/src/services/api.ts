@@ -19,13 +19,14 @@ export interface Session {
 
 const request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
   const token = localStorage.getItem("nexpdv_admin_token");
+  const headers: Record<string, string> = {
+    ...(options.body ? { "Content-Type": "application/json" } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers as Record<string, string> | undefined)
+  };
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers
-    }
+    headers
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
@@ -69,9 +70,9 @@ export const api = {
     localStorage.removeItem("nexpdv_admin_refresh");
     localStorage.removeItem("nexpdv_admin_user");
   },
-  setup2fa: () => request<{ secret: string; otpauthUrl: string; qrCodeDataUrl: string }>("/auth/2fa/setup", { method: "POST" }),
+  setup2fa: () => request<{ secret: string; otpauthUrl: string; qrCodeDataUrl: string }>("/auth/2fa/setup", { method: "POST", body: JSON.stringify({}) }),
   enable2fa: (code: string) => request<{ recoveryCodes: string[] }>("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code }) }),
-  disable2fa: () => request<{ ok: boolean }>("/auth/2fa/disable", { method: "POST" }),
+  disable2fa: () => request<{ ok: boolean }>("/auth/2fa/disable", { method: "POST", body: JSON.stringify({}) }),
   dashboard: () => request<any>("/admin/dashboard"),
   companies: () => request<any[]>("/admin/companies"),
   createCompany: (input: any) => request<any>("/companies", { method: "POST", body: JSON.stringify(input) }),
@@ -99,11 +100,11 @@ export const api = {
   renewLicense: (id: string, validUntil: string) => request<any>(`/licenses/${id}/renew`, { method: "POST", body: JSON.stringify({ validUntil }) }),
   changeLicensePlan: (id: string, planCode: string) => request<any>(`/licenses/${id}/plan`, { method: "POST", body: JSON.stringify({ planCode }) }),
   saveLicenseModules: (id: string, features: any) => request<any>(`/licenses/${id}/modules`, { method: "POST", body: JSON.stringify({ features }) }),
-  resetActivation: (id: string) => request<any>(`/licenses/${id}/reset-activation`, { method: "POST" }),
+  resetActivation: (id: string) => request<any>(`/licenses/${id}/reset-activation`, { method: "POST", body: JSON.stringify({}) }),
   devices: () => request<any[]>("/admin/devices"),
   updateDevice: (id: string, input: any) => request<any>(`/devices/${id}`, { method: "PATCH", body: JSON.stringify(input) }),
-  deactivateDevice: (id: string) => request<any>(`/devices/${id}/deactivate`, { method: "POST" }),
-  blockDevice: (id: string) => request<any>(`/devices/${id}/block`, { method: "POST" }),
+  deactivateDevice: (id: string) => request<any>(`/devices/${id}/deactivate`, { method: "POST", body: JSON.stringify({}) }),
+  blockDevice: (id: string) => request<any>(`/devices/${id}/block`, { method: "POST", body: JSON.stringify({}) }),
   deleteDevice: (id: string) => request<any>(`/devices/${id}`, { method: "DELETE" }),
   syncJobs: () => request<any[]>("/admin/sync-jobs"),
   audit: () => request<any[]>("/admin/audit"),

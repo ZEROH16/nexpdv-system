@@ -28,9 +28,13 @@ const licenseKey = (planCode: string) => `NEXPDV-${planCode}-${randomBytes(3).to
 const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 
 const adminGuard = async (request: FastifyRequest, reply: any) => {
-  const user = request.user as { role?: string; platformRole?: string };
-  if (!["owner", "admin"].includes(user.role ?? "") && !["super_admin", "support"].includes(user.platformRole ?? "")) {
+  const user = request.user as { sub?: string; role?: string; platformRole?: string };
+  if (!["owner", "admin"].includes(user.role ?? "") && !["super_admin", "admin", "suporte", "financeiro", "comercial", "leitura", "support"].includes(user.platformRole ?? "")) {
     return reply.code(403).send({ message: "Acesso SaaS restrito." });
+  }
+  if (user.platformRole === "super_admin" && user.sub) {
+    const current = await request.server.prisma.user.findUnique({ where: { id: user.sub }, select: { twoFactorEnabled: true } });
+    if (!current?.twoFactorEnabled) return reply.code(403).send({ message: "Configure o 2FA antes de acessar o painel admin.", requiresTwoFactorSetup: true });
   }
 };
 

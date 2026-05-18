@@ -115,7 +115,12 @@ export const authRoutes = async (app: FastifyInstance) => {
     };
   });
 
-  app.get("/auth/me", { preHandler: app.authenticate }, async (request) => request.user);
+  app.get("/auth/me", { preHandler: app.authenticate }, async (request, reply) => {
+    const current = request.user as { sub: string };
+    const user = await app.prisma.user.findUnique({ where: { id: current.sub }, include: { company: true } });
+    if (!user || !user.active) return reply.code(401).send({ message: "Sessao invalida." });
+    return publicUser(user);
+  });
 
   app.post("/auth/refresh", async (request, reply) => {
     const input = refreshSchema.parse(request.body);

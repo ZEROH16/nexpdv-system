@@ -3,8 +3,8 @@ import type { Session } from "@/services/api";
 import { api } from "@/services/api";
 
 export const Login = ({ onLogin }: { onLogin: (session: Session) => void }) => {
-  const [email, setEmail] = useState("admin@nexpdv.com.br");
-  const [password, setPassword] = useState("123456");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [twoFactorCode, setTwoFactorCode] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
   const [needs2fa, setNeeds2fa] = useState(false);
@@ -31,8 +31,8 @@ export const Login = ({ onLogin }: { onLogin: (session: Session) => void }) => {
         <h1 className="mt-6 text-3xl font-black">NexPDV Admin</h1>
         <p className="mt-2 text-sm font-semibold text-slate-400">Controle SaaS, licenciamento e operação centralizada.</p>
         <div className="mt-8 grid gap-3">
-          <input className="field" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
-          <input className="field" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Senha" type="password" />
+          <input className="field" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" autoComplete="username" />
+          <input className="field" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Senha" type="password" autoComplete="current-password" />
           {needs2fa ? (
             <div className="grid gap-3 rounded-lg border border-cobalt/30 bg-cobalt/10 p-3">
               <input className="field" value={twoFactorCode} onChange={(event) => setTwoFactorCode(event.target.value)} placeholder="Código 2FA" inputMode="numeric" />
