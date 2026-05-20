@@ -26,16 +26,25 @@ const parseFeatures = (value?: string | null): FeatureMap => {
 const featureString = (features: Partial<FeatureMap>) => JSON.stringify({ ...emptyFeatures(), ...features });
 const licenseKey = (planCode: string) => `NEXPDV-${planCode}-${randomBytes(3).toString("hex").toUpperCase()}`;
 const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
-const strongDeleteCompany = "EXCLUIR DEFINITIVO";
-const strongDeleteLicense = "EXCLUIR LICENCA";
+const strongDeleteCompany = "EXCLUIR";
+const strongDeleteLicense = "EXCLUIR";
 
 const userFromRequest = (request: FastifyRequest) => request.user as { sub?: string; role?: string; platformRole?: string; tenantId?: string };
 const isSuperAdmin = (request: FastifyRequest) => userFromRequest(request).platformRole === "super_admin";
 const forbiddenIfNotSuperAdmin = (request: FastifyRequest, reply: any) => {
   if (isSuperAdmin(request)) return false;
-  reply.code(403).send({ message: "Acao restrita ao super_admin." });
+  reply.code(403).send({ code: "SUPER_ADMIN_REQUIRED", message: "Acao restrita ao super_admin.", details: "Inative ou bloqueie o registro em vez de excluir definitivamente." });
   return true;
 };
+
+const entityHasLinks = (reply: any, message: string, linkedEntities: Record<string, number>, details?: string, extra?: Record<string, unknown>) =>
+  reply.code(409).send({
+    code: "ENTITY_HAS_LINKS",
+    message,
+    details,
+    linkedEntities,
+    ...extra
+  });
 
 const backupLevel = (lastBackupAt?: Date | null) => {
   if (!lastBackupAt) return { level: "gray", label: "nunca fez backup", days: null as number | null };
@@ -317,7 +326,7 @@ export const saasRoutes = async (app: FastifyInstance) => {
       where: query.search
         ? { OR: [{ name: { contains: query.search } }, { tradeName: { contains: query.search } }, { document: { contains: query.search } }] }
         : undefined,
-      include: { licenses: true, subscriptions: { include: { plan: true } }, devices: true, _count: { select: { users: true, sales: true, products: true } } },
+      include: { licenses: true, subscriptions: { include: { plan: true } }, devices: true, _count: { select: { users: true, sales: true, products: true, customers: true, cashRegisters: true, settings: true, syncJobs: true, deviceTokens: true, subscriptions: true } } },
       orderBy: { createdAt: "desc" },
       take: 200
     });
@@ -373,50 +382,76 @@ export const saasRoutes = async (app: FastifyInstance) => {
       const body = z.object({ force: z.boolean().default(false), confirmation: z.string().optional() }).parse(request.body ?? {});
       const relations = await app.prisma.company.findUnique({
         where: { id: params.id },
-        include: { _count: { select: { licenses: true, devices: true, sales: true, syncJobs: true, users: true, products: true, customers: true, cashRegisters: true, settings: true, subscriptions: true } } }
+        include: { _count: { select: { licenses: true, devices: true, sales: true, syncJobs: true, users: true, products: true, customers: true, cashRegisters: true, settings: true, subscriptions: true, deviceTokens: true } } }
       });
       if (!relations) return reply.code(404).send({ message: "Empresa nao encontrada." });
-      const linked = Object.values(relations._count).some((count) => count > 0);
-      if (linked && !body.force) {
-        return reply.code(409).send({
-          message: "Empresa possui vinculos. Inative/bloqueie ou confirme exclusao definitiva como super_admin.",
-          linked: true,
-          counts: relations._count,
-          canForce: isSuperAdmin(request),
+
+      const companyUsers = await app.prisma.user.findMany({ where: { companyId: params.id }, select: { id: true } });
+      const companyUserIds = companyUsers.map((user) => user.id);
+      const [syncLogs, auditLogs] = await Promise.all([
+        app.prisma.syncLog.count({ where: { companyId: params.id } }),
+        app.prisma.auditLog.count({ where: { OR: [{ entity: "company", entityId: params.id }, { userId: { in: companyUserIds } }] } })
+      ]);
+      const linkedEntities = {
+        licenses: relations._count.licenses,
+        devices: relations._count.devices,
+        syncJobs: relations._count.syncJobs,
+        logs: syncLogs,
+        auditLogs,
+        sales: relations._count.sales,
+        users: relations._count.users,
+        products: relations._count.products,
+        customers: relations._count.customers,
+        cashRegisters: relations._count.cashRegisters,
+        settings: relations._count.settings,
+        subscriptions: relations._count.subscriptions,
+        deviceTokens: relations._count.deviceTokens
+      };
+      const linked = Object.values(linkedEntities).some((count) => count > 0);
+
+      if (forbiddenIfNotSuperAdmin(request, reply)) return reply;
+      if (!body.force || body.confirmation !== strongDeleteCompany) {
+        if (linked) {
+          return entityHasLinks(
+            reply,
+            "Empresa possui licencas, dispositivos, vendas, sync ou outros vinculos. Confirme a exclusao definitiva em cascata como super_admin.",
+            linkedEntities,
+            `Digite ${strongDeleteCompany} para remover definitivamente a empresa e todos os vinculos.`,
+            { canForce: true, confirmation: strongDeleteCompany }
+          );
+        }
+        return reply.code(400).send({
+          code: "CONFIRMATION_REQUIRED",
+          message: "Exclusao definitiva de empresa exige confirmacao forte.",
+          details: `Digite ${strongDeleteCompany} para excluir definitivamente.`,
           confirmation: strongDeleteCompany
         });
       }
-      if (linked && forbiddenIfNotSuperAdmin(request, reply)) return reply;
-      if (linked && body.confirmation !== strongDeleteCompany) {
-        return reply.code(400).send({ message: `Digite ${strongDeleteCompany} para excluir definitivamente.` });
-      }
-      if (linked) {
-        await app.prisma.$transaction([
-          app.prisma.payment.deleteMany({ where: { sale: { companyId: params.id } } }),
-          app.prisma.saleItem.deleteMany({ where: { sale: { companyId: params.id } } }),
-          app.prisma.sale.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.cashMovement.deleteMany({ where: { cashRegister: { companyId: params.id } } }),
-          app.prisma.cashRegister.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.product.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.category.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.customer.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.setting.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.deviceToken.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.syncJob.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.syncLog.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.device.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.subscription.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.license.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.auditLog.updateMany({ where: { user: { companyId: params.id } }, data: { userId: null } }),
-          app.prisma.user.deleteMany({ where: { companyId: params.id } }),
-          app.prisma.company.delete({ where: { id: params.id } })
-        ]);
-        await audit(app, { userId: (request.user as any).sub, action: "empresa excluida definitivamente", entity: "company", entityId: params.id, details: JSON.stringify(relations._count), request });
-        return { ok: true, hardDeleted: true };
-      }
-      await app.prisma.company.delete({ where: { id: params.id } });
-      await audit(app, { userId: (request.user as any).sub, action: "empresa excluida", entity: "company", entityId: params.id, request });
-      return { ok: true };
+
+      const actorId = userFromRequest(request).sub;
+      const auditUserId = actorId && companyUserIds.includes(actorId) ? undefined : actorId;
+      await app.prisma.$transaction([
+        app.prisma.payment.deleteMany({ where: { sale: { companyId: params.id } } }),
+        app.prisma.saleItem.deleteMany({ where: { sale: { companyId: params.id } } }),
+        app.prisma.sale.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.cashMovement.deleteMany({ where: { cashRegister: { companyId: params.id } } }),
+        app.prisma.cashRegister.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.product.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.category.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.customer.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.setting.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.deviceToken.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.syncJob.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.syncLog.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.device.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.subscription.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.license.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.auditLog.deleteMany({ where: { OR: [{ entity: "company", entityId: params.id }, { userId: { in: companyUserIds } }] } }),
+        app.prisma.user.deleteMany({ where: { companyId: params.id } }),
+        app.prisma.company.delete({ where: { id: params.id } })
+      ]);
+      await audit(app, { tenantId: relations.tenantId, userId: auditUserId, action: "empresa excluida definitivamente", entity: "company", entityId: params.id, details: JSON.stringify(linkedEntities), request });
+      return { ok: true, hardDeleted: true, linkedEntities };
     });
 
     adminApp.get("/plans", async () => app.prisma.plan.findMany({ orderBy: { price: "asc" } }));
@@ -489,7 +524,12 @@ export const saasRoutes = async (app: FastifyInstance) => {
       const plan = await app.prisma.plan.findUnique({ where: { id: params.id }, include: { _count: { select: { licenses: true, subscriptions: true } } } });
       if (!plan) return reply.code(404).send({ message: "Plano nao encontrado." });
       if (plan._count.licenses || plan._count.subscriptions) {
-        return reply.code(409).send({ message: "Plano em uso. Inative o plano em vez de excluir.", counts: plan._count });
+        return entityHasLinks(
+          reply,
+          "Este plano esta vinculado a licencas/empresas. Inative o plano ou migre as licencas antes de excluir.",
+          { licenses: plan._count.licenses, subscriptions: plan._count.subscriptions },
+          "Planos em uso nao sao excluidos automaticamente para evitar alterar contratos ativos."
+        );
       }
       await app.prisma.plan.delete({ where: { id: params.id } });
       await audit(app, { userId: (request.user as any).sub, action: "plano excluido", entity: "plan", entityId: params.id, details: plan.code, request });
@@ -564,21 +604,29 @@ export const saasRoutes = async (app: FastifyInstance) => {
       const body = z.object({ force: z.boolean().default(false), confirmation: z.string().optional() }).parse(request.body ?? {});
       const license = await app.prisma.license.findUnique({ where: { id: params.id }, include: { devices: true } });
       if (!license) return reply.code(404).send({ message: "Licenca nao encontrada." });
-      if (license.devices.length && !body.force) {
-        return reply.code(409).send({
-          message: "Licenca possui dispositivos vinculados. Cancele/bloqueie ou confirme exclusao definitiva como super_admin.",
-          linked: true,
-          counts: { devices: license.devices.length },
-          canForce: isSuperAdmin(request),
+
+      if (forbiddenIfNotSuperAdmin(request, reply)) return reply;
+      if (!body.force || body.confirmation !== strongDeleteLicense) {
+        if (license.devices.length) {
+          return entityHasLinks(
+            reply,
+            "Licenca possui dispositivos vinculados. Confirme a exclusao definitiva para desvincular e inativar os dispositivos automaticamente.",
+            { devices: license.devices.length },
+            `Digite ${strongDeleteLicense} para excluir a licenca definitivamente.`,
+            { canForce: true, confirmation: strongDeleteLicense }
+          );
+        }
+        return reply.code(400).send({
+          code: "CONFIRMATION_REQUIRED",
+          message: "Exclusao definitiva de licenca exige confirmacao forte.",
+          details: `Digite ${strongDeleteLicense} para excluir definitivamente.`,
           confirmation: strongDeleteLicense
         });
       }
-      if (license.devices.length && forbiddenIfNotSuperAdmin(request, reply)) return reply;
-      if (license.devices.length && body.confirmation !== strongDeleteLicense) {
-        return reply.code(400).send({ message: `Digite ${strongDeleteLicense} para excluir definitivamente.` });
-      }
-      if (license.devices.length) await app.prisma.device.updateMany({ where: { licenseId: params.id }, data: { licenseId: null, status: "inactive", online: false, deactivatedAt: new Date() } });
-      await app.prisma.license.delete({ where: { id: params.id } });
+      await app.prisma.$transaction([
+        app.prisma.device.updateMany({ where: { licenseId: params.id }, data: { licenseId: null, status: "inactive", online: false, deactivatedAt: new Date() } }),
+        app.prisma.license.delete({ where: { id: params.id } })
+      ]);
       await audit(app, { userId: (request.user as any).sub, action: "licenca excluida", entity: "license", entityId: params.id, details: license.key, request });
       return { ok: true, detachedDevices: license.devices.length };
     });

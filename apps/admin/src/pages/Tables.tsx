@@ -1,4 +1,5 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   Ban,
@@ -80,36 +81,16 @@ export const Companies = () => {
   };
 
   const deleteCompany = (row: any) => {
+    const counts = companyDeleteCounts(row);
     feedback.ask({
-      title: "Excluir empresa",
-      message: `Excluir ${row.tradeName ?? row.name}? Se houver vinculos, o painel vai pedir uma confirmacao forte ou voce pode inativar.`,
-      confirmLabel: "Excluir",
+      title: "Excluir definitivamente",
+      message: `Esta acao remove ${row.tradeName ?? row.name} e tudo que estiver atrelado a ela. Resumo: ${countSummary(counts)}.`,
+      confirmationText: "EXCLUIR",
+      confirmLabel: "Excluir definitivamente",
       secondaryLabel: "Inativar",
       danger: true,
       onSecondary: () => feedback.run(() => api.setCompanyStatus(row.id, "inactive").then(refresh), "Empresa inativada."),
-      onConfirm: async () => {
-        try {
-          await api.deleteCompany(row.id);
-          feedback.success("Empresa excluida.");
-          await refresh();
-        } catch (error) {
-          const payload = errorPayload(error);
-          if (payload?.linked) {
-            feedback.ask({
-              title: "Empresa com vinculos",
-              message: "Esta empresa possui licencas, dispositivos, vendas ou sync. Para excluir definitivamente, confirme como super_admin.",
-              confirmationText: payload.confirmation ?? "EXCLUIR DEFINITIVO",
-              confirmLabel: "Excluir definitivo",
-              secondaryLabel: "Inativar empresa",
-              danger: true,
-              onSecondary: () => feedback.run(() => api.setCompanyStatus(row.id, "inactive").then(refresh), "Empresa inativada."),
-              onConfirm: () => feedback.run(() => api.deleteCompany(row.id, { force: true, confirmation: payload.confirmation ?? "EXCLUIR DEFINITIVO" }).then(refresh), "Empresa excluida definitivamente.")
-            });
-            return;
-          }
-          feedback.fail(error);
-        }
-      }
+      onConfirm: () => feedback.run(() => api.deleteCompany(row.id, { force: true, confirmation: "EXCLUIR" }).then(refresh), "Empresa excluida com todos os vinculos.")
     });
   };
 
@@ -176,7 +157,7 @@ export const Plans = () => {
   const deletePlan = (plan: any) => {
     feedback.ask({
       title: "Excluir plano",
-      message: `Excluir o plano ${plan.name}? Planos em uso serao bloqueados para exclusao.`,
+      message: `Excluir definitivamente o plano ${plan.name}? Se ele estiver vinculado a licencas ou assinaturas, a API vai orientar a inativacao.`,
       confirmLabel: "Excluir",
       secondaryLabel: plan.active ? "Inativar" : undefined,
       danger: true,
@@ -188,9 +169,10 @@ export const Plans = () => {
           await refresh();
         } catch (error) {
           if (statusCode(error) === 409) {
+            const payload = errorPayload(error);
             feedback.ask({
               title: "Plano em uso",
-              message: "Este plano tem licencas ou assinaturas vinculadas. A alternativa segura e inativar.",
+              message: `${payload?.message ?? "Este plano esta vinculado a licencas/empresas. Inative o plano ou migre as licencas antes de excluir."} Vinculos: ${countSummary(payload?.linkedEntities ?? {})}.`,
               confirmLabel: "Inativar plano",
               onConfirm: () => feedback.run(() => api.setPlanStatus(plan.id, false).then(refresh), "Plano inativado.")
             });
@@ -272,34 +254,16 @@ export const Licenses = () => {
   };
 
   const deleteLicense = (row: any) => {
+    const devices = row.devices?.length ?? 0;
     feedback.ask({
-      title: "Excluir licenca",
-      message: `Excluir ${row.key}? Licencas com dispositivos exigem confirmacao forte.`,
-      confirmLabel: "Excluir",
+      title: "Excluir licenca definitivamente",
+      message: devices ? `A licenca ${row.key} possui ${devices} dispositivo(s). Eles serao desvinculados e inativados automaticamente.` : `Excluir definitivamente a licenca ${row.key}?`,
+      confirmationText: "EXCLUIR",
+      confirmLabel: "Excluir definitivamente",
+      secondaryLabel: "Cancelar licenca",
       danger: true,
-      onConfirm: async () => {
-        try {
-          await api.deleteLicense(row.id);
-          feedback.success("Licenca excluida.");
-          await refresh();
-        } catch (error) {
-          const payload = errorPayload(error);
-          if (payload?.linked) {
-            feedback.ask({
-              title: "Licenca com dispositivo",
-              message: "Para excluir definitivamente, os dispositivos serao desvinculados/inativados.",
-              confirmationText: payload.confirmation ?? "EXCLUIR LICENCA",
-              confirmLabel: "Excluir definitivo",
-              secondaryLabel: "Cancelar licenca",
-              danger: true,
-              onSecondary: () => feedback.run(() => api.cancelLicense(row.id).then(refresh), "Licenca cancelada."),
-              onConfirm: () => feedback.run(() => api.deleteLicense(row.id, { force: true, confirmation: payload.confirmation ?? "EXCLUIR LICENCA" }).then(refresh), "Licenca excluida.")
-            });
-            return;
-          }
-          feedback.fail(error);
-        }
-      }
+      onSecondary: () => feedback.run(() => api.cancelLicense(row.id).then(refresh), "Licenca cancelada."),
+      onConfirm: () => feedback.run(() => api.deleteLicense(row.id, { force: true, confirmation: "EXCLUIR" }).then(refresh), "Licenca excluida.")
     });
   };
 
@@ -528,27 +492,83 @@ const Button = ({ children, onClick }: { children: ReactNode; onClick: () => voi
   <button className="inline-flex h-11 items-center gap-2 rounded-lg bg-white px-4 text-sm font-black text-ink" onClick={onClick}>{children}</button>
 );
 
-const ActionMenu = ({ items }: { items: Action[] }) => (
-  <details className="group relative inline-block">
-    <summary className="inline-flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-lg bg-white/10 px-3 text-xs font-black text-slate-100 hover:bg-white/20">
-      <MoreHorizontal size={15} />Acoes
-    </summary>
-    <div className="absolute right-0 z-30 mt-2 w-52 rounded-lg border border-white/10 bg-[#111827] p-2 shadow-panel">
-      {items.map(({ label, icon: Icon, onClick, danger }) => (
-        <button
-          key={label}
-          className={`flex h-9 w-full items-center gap-2 rounded-md px-3 text-left text-xs font-black hover:bg-white/10 ${danger ? "text-red-200" : "text-slate-100"}`}
-          onClick={(event) => {
-            event.currentTarget.closest("details")?.removeAttribute("open");
-            onClick();
-          }}
-        >
-          <Icon size={14} />{label}
-        </button>
-      ))}
-    </div>
-  </details>
-);
+const ActionMenu = ({ items }: { items: Action[] }) => {
+  const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  const updatePosition = () => {
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const menuWidth = 224;
+    const menuHeight = Math.min(320, items.length * 38 + 16);
+    const gap = 8;
+    const margin = 12;
+    const top = rect.bottom + gap + menuHeight > window.innerHeight - margin ? Math.max(margin, rect.top - menuHeight - gap) : rect.bottom + gap;
+    const left = Math.min(Math.max(margin, rect.right - menuWidth), window.innerWidth - menuWidth - margin);
+    setPosition({ top, left });
+  };
+
+  useEffect(() => {
+    if (!open) return undefined;
+    updatePosition();
+    const closeOnOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    document.addEventListener("mousedown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      document.removeEventListener("mousedown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open, items.length]);
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-white/10 px-3 text-xs font-black text-slate-100 hover:bg-white/20"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <MoreHorizontal size={15} />Acoes
+      </button>
+      {open
+        ? createPortal(
+            <div ref={menuRef} className="z-[90] max-h-80 w-56 overflow-auto rounded-lg border border-white/10 bg-[#111827] p-2 shadow-panel" style={{ position: "fixed", top: position.top, left: position.left }} role="menu">
+              {items.map(({ label, icon: Icon, onClick, danger }) => (
+                <button
+                  key={label}
+                  className={`flex h-9 w-full items-center gap-2 rounded-md px-3 text-left text-xs font-black hover:bg-white/10 ${danger ? "text-red-200" : "text-slate-100"}`}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setOpen(false);
+                    onClick();
+                  }}
+                >
+                  <Icon size={14} />{label}
+                </button>
+              ))}
+            </div>,
+            document.body
+          )
+        : null}
+    </>
+  );
+};
 
 const Table = ({ rows, columns }: { rows: any[]; columns: Array<[string, (row: any) => ReactNode]> }) => (
   <section className="panel overflow-auto">
@@ -799,6 +819,43 @@ const userBlank = () => ({ name: "", email: "", phone: "", platformRole: "suport
 const userFrom = (row: any) => ({ ...userBlank(), ...row, password: "", permissions: parseJson(row.permissionsJson) });
 
 const clean = (input: any) => Object.fromEntries(Object.entries(input).filter(([, value]) => value !== ""));
+const countLabels: Record<string, string> = {
+  licenses: "licencas",
+  devices: "dispositivos",
+  syncJobs: "sync jobs",
+  logs: "logs",
+  auditLogs: "auditorias",
+  sales: "vendas",
+  users: "usuarios",
+  products: "produtos",
+  customers: "clientes",
+  cashRegisters: "caixas",
+  settings: "configuracoes",
+  subscriptions: "assinaturas",
+  deviceTokens: "tokens"
+};
+const countSummary = (counts: Record<string, unknown>) => {
+  const entries = Object.entries(counts)
+    .map(([key, value]) => [key, Number(value ?? 0)] as const)
+    .filter(([, value]) => value > 0)
+    .map(([key, value]) => `${value} ${countLabels[key] ?? key}`);
+  return entries.length ? entries.join(", ") : "nenhum vinculo encontrado";
+};
+const companyDeleteCounts = (row: any) => ({
+  licenses: row.licenses?.length ?? row._count?.licenses ?? 0,
+  devices: row.devices?.length ?? row._count?.devices ?? 0,
+  syncJobs: row.syncJobs?.length ?? row._count?.syncJobs ?? 0,
+  logs: row.logs?.length ?? row._count?.logs ?? 0,
+  auditLogs: row.auditLogs?.length ?? row._count?.auditLogs ?? 0,
+  sales: row._count?.sales ?? 0,
+  users: row._count?.users ?? 0,
+  products: row._count?.products ?? 0,
+  customers: row._count?.customers ?? 0,
+  cashRegisters: row._count?.cashRegisters ?? 0,
+  settings: row._count?.settings ?? 0,
+  subscriptions: row.subscriptions?.length ?? row._count?.subscriptions ?? 0,
+  deviceTokens: row._count?.deviceTokens ?? 0
+});
 const dateOnly = (value?: string) => (value ? new Date(value).toISOString().slice(0, 10) : "");
 const parseJson = (value?: string) => {
   try {
