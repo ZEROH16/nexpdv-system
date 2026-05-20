@@ -64,26 +64,31 @@ model Company {
 }
 
 model User {
-  id                  String    @id @default(cuid())
-  tenantId            String?
-  companyId           String
-  name                String
-  email               String    @unique
-  phone               String?
-  passwordHash        String
-  role                String    @default("cashier")
-  platformRole        String    @default("company_user")
-  permissionsJson     String    @default("{}")
-  active              Boolean   @default(true)
-  refreshTokenHash    String?
-  twoFactorEnabled    Boolean   @default(false)
-  twoFactorSecret     String?
-  recoveryCodesHash   String?
-  failedLoginAttempts Int       @default(0)
-  lockedUntil         DateTime?
-  lastLoginAt         DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  id                          String    @id @default(cuid())
+  tenantId                    String?
+  companyId                   String
+  name                        String
+  email                       String    @unique
+  phone                       String?
+  passwordHash                String
+  role                        String    @default("cashier")
+  platformRole                String    @default("company_user")
+  permissionsJson             String    @default("{}")
+  active                      Boolean   @default(true)
+  refreshTokenHash            String?
+  twoFactorEnabled            Boolean   @default(false)
+  twoFactorSecret             String?
+  recoveryCodesHash           String?
+  firstAccessRequired         Boolean   @default(false)
+  initialAccessTokenHash      String?
+  initialAccessTokenExpiresAt DateTime?
+  initialAccessCompletedAt    DateTime?
+  passwordChangedAt           DateTime?
+  failedLoginAttempts         Int       @default(0)
+  lockedUntil                 DateTime?
+  lastLoginAt                 DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
 
   tenant    Tenant?    @relation(fields: [tenantId], references: [id])
   company   Company    @relation(fields: [companyId], references: [id])
@@ -92,6 +97,7 @@ model User {
 
   @@index([tenantId])
   @@index([companyId])
+  @@index([firstAccessRequired])
 }
 
 model Category {

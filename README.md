@@ -82,6 +82,30 @@ Login demo:
 - Senha: `123456`
 - Licenca local: `NEXPDV-2026`
 
+## Primeiro Acesso Do Admin SaaS
+
+Para criar ou recuperar o super admin local do painel SaaS, rode:
+
+```bash
+npm run admin:bootstrap -w @nexpdv/api -- --email=SEU_EMAIL --password="SUA_SENHA_FORTE" --name="SEU_NOME"
+```
+
+Se nenhum parametro for informado, o comando usa:
+
+- Email: `admin@nexpdv.com.br`
+- Senha: `123456`
+- Nome: `Administrador NexPDV`
+
+O bootstrap imprime um token inicial no terminal. No painel admin, acesse `/login`, entre com email/senha inicial, informe esse token, defina a senha definitiva e configure o 2FA obrigatorio.
+
+Para resetar o 2FA de um admin SaaS e gerar novo token inicial:
+
+```bash
+npm run admin:reset-2fa -w @nexpdv/api -- --email=SEU_EMAIL
+```
+
+Os tokens iniciais expiram, ficam armazenados com hash e sao invalidados ao concluir o primeiro acesso.
+
 ## Build
 
 ```bash

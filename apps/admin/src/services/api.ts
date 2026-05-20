@@ -14,8 +14,25 @@ export interface Session {
     companyId: string;
     companyName: string;
     twoFactorEnabled?: boolean;
+    firstAccessRequired?: boolean;
   };
 }
+
+export interface FirstAccessRequired {
+  firstAccessRequired: true;
+  email: string;
+  name: string;
+  message: string;
+}
+
+export interface FirstAccessSetup {
+  firstAccessSessionToken: string;
+  secret: string;
+  otpauthUrl: string;
+  qrCodeDataUrl: string;
+}
+
+export type LoginResult = Session | FirstAccessRequired;
 
 const request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
   const token = localStorage.getItem("nexpdv_admin_token");
@@ -38,16 +55,29 @@ const request = async <T>(path: string, options: RequestInit = {}): Promise<T> =
   return response.json() as Promise<T>;
 };
 
+const persistSession = (session: Session) => {
+  localStorage.setItem("nexpdv_admin_token", session.token);
+  if (session.refreshToken) localStorage.setItem("nexpdv_admin_refresh", session.refreshToken);
+  localStorage.setItem("nexpdv_admin_user", JSON.stringify(session.user));
+};
+
+const clearSession = () => {
+  localStorage.removeItem("nexpdv_admin_token");
+  localStorage.removeItem("nexpdv_admin_refresh");
+  localStorage.removeItem("nexpdv_admin_user");
+};
+
+const isSession = (result: LoginResult): result is Session => "token" in result;
+
 export const api = {
   login: async (email: string, password: string, twoFactorCode?: string, recoveryCode?: string) => {
-    const session = await request<Session>("/auth/login", {
+    const result = await request<LoginResult>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password, twoFactorCode, recoveryCode })
     });
-    localStorage.setItem("nexpdv_admin_token", session.token);
-    if (session.refreshToken) localStorage.setItem("nexpdv_admin_refresh", session.refreshToken);
-    localStorage.setItem("nexpdv_admin_user", JSON.stringify(session.user));
-    return session;
+    if (isSession(result)) persistSession(result);
+    else clearSession();
+    return result;
   },
   restore: () => {
     const token = localStorage.getItem("nexpdv_admin_token");
@@ -59,16 +89,19 @@ export const api = {
     const refreshToken = localStorage.getItem("nexpdv_admin_refresh");
     if (!refreshToken) throw new Error("Sessao expirada.");
     const session = await request<Session>("/auth/refresh", { method: "POST", body: JSON.stringify({ refreshToken }) });
-    localStorage.setItem("nexpdv_admin_token", session.token);
-    if (session.refreshToken) localStorage.setItem("nexpdv_admin_refresh", session.refreshToken);
-    localStorage.setItem("nexpdv_admin_user", JSON.stringify(session.user));
+    persistSession(session);
     return session;
   },
   logout: async () => {
     await request("/auth/logout", { method: "POST" }).catch(() => undefined);
-    localStorage.removeItem("nexpdv_admin_token");
-    localStorage.removeItem("nexpdv_admin_refresh");
-    localStorage.removeItem("nexpdv_admin_user");
+    clearSession();
+  },
+  firstAccessStart: (input: { email: string; password: string; initialToken: string }) =>
+    request<FirstAccessSetup>("/auth/first-access/start", { method: "POST", body: JSON.stringify(input) }),
+  firstAccessComplete: async (input: { firstAccessSessionToken: string; newPassword: string; twoFactorCode: string }) => {
+    const session = await request<Session & { recoveryCodes: string[] }>("/auth/first-access/complete", { method: "POST", body: JSON.stringify(input) });
+    persistSession(session);
+    return session;
   },
   setup2fa: () => request<{ secret: string; otpauthUrl: string; qrCodeDataUrl: string }>("/auth/2fa/setup", { method: "POST", body: JSON.stringify({}) }),
   enable2fa: (code: string) => request<{ recoveryCodes: string[] }>("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code }) }),

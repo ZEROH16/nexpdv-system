@@ -32,9 +32,12 @@ const adminGuard = async (request: FastifyRequest, reply: any) => {
   if (!["owner", "admin"].includes(user.role ?? "") && !["super_admin", "admin", "suporte", "financeiro", "comercial", "leitura", "support"].includes(user.platformRole ?? "")) {
     return reply.code(403).send({ message: "Acesso SaaS restrito." });
   }
-  if (user.platformRole === "super_admin" && user.sub) {
-    const current = await request.server.prisma.user.findUnique({ where: { id: user.sub }, select: { twoFactorEnabled: true } });
-    if (!current?.twoFactorEnabled) return reply.code(403).send({ message: "Configure o 2FA antes de acessar o painel admin.", requiresTwoFactorSetup: true });
+  if (user.sub) {
+    const current = await request.server.prisma.user.findUnique({ where: { id: user.sub }, select: { twoFactorEnabled: true, firstAccessRequired: true } });
+    if (current?.firstAccessRequired) return reply.code(403).send({ message: "Conclua o primeiro acesso antes de acessar o painel admin.", firstAccessRequired: true });
+    if (["super_admin", "admin"].includes(user.platformRole ?? "") && !current?.twoFactorEnabled) {
+      return reply.code(403).send({ message: "Configure o 2FA antes de acessar o painel admin.", requiresTwoFactorSetup: true });
+    }
   }
 };
 
@@ -584,7 +587,7 @@ export const saasRoutes = async (app: FastifyInstance) => {
     adminApp.get("/admin/subscriptions", async () => app.prisma.subscription.findMany({ include: { company: true, plan: true }, orderBy: { createdAt: "desc" } }));
     adminApp.get("/admin/users", async () =>
     app.prisma.user.findMany({
-      select: { id: true, tenantId: true, companyId: true, name: true, email: true, phone: true, role: true, platformRole: true, permissionsJson: true, active: true, twoFactorEnabled: true, lastLoginAt: true, createdAt: true },
+      select: { id: true, tenantId: true, companyId: true, name: true, email: true, phone: true, role: true, platformRole: true, permissionsJson: true, active: true, twoFactorEnabled: true, firstAccessRequired: true, lastLoginAt: true, createdAt: true },
       orderBy: { createdAt: "desc" },
       take: 250
     })
