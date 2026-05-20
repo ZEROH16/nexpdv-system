@@ -79,7 +79,8 @@ contextBridge.exposeInMainWorld("nexpdv", {
     security: () => invoke("system:security"),
     backupState: () => invoke("system:backup-state"),
     backupExport: () => invoke("system:backup-export"),
-    backupRestore: (filePath: string) => invoke("system:backup-restore", filePath)
+    backupRestore: (filePath: string) => invoke("system:backup-restore", filePath),
+    resetLocal: () => invoke("system:reset-local")
   },
   pix: {
     config: () => invoke("pix:config"),

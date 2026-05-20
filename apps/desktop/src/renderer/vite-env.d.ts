@@ -74,6 +74,7 @@ declare global {
         backupState: <T>() => Promise<T>;
         backupExport: <T>() => Promise<T>;
         backupRestore: <T>(filePath: string) => Promise<T>;
+        resetLocal: <T>() => Promise<T>;
       };
       pix: {
         config: <T>() => Promise<T>;

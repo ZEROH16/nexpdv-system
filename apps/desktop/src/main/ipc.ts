@@ -1,9 +1,10 @@
-import { ipcMain } from "electron";
+import { app, ipcMain } from "electron";
 import type { LocalDatabase } from "./localDatabase";
 import type { SyncEngine } from "./syncEngine";
 import { assertLicensedModule, checkLocalLicense } from "./licenseService";
 import { listThermalPrinters, openCashDrawer, printReceipt, printTestReceipt, type ReceiptPrintContext } from "./receiptPrinter";
 import { renderQrSvgDataUrl } from "./qrCodeRenderer";
+import { requestLocalResetOnNextStart } from "./devResetLocal";
 
 interface ReceiptPrintRequest {
   html: string;
@@ -77,6 +78,21 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("system:backup-state", () => db.getBackupState());
   ipcMain.handle("system:backup-export", () => db.exportLocalBackup());
   ipcMain.handle("system:backup-restore", (_event, filePath: string) => db.restoreLocalBackup(filePath));
+  ipcMain.handle("system:reset-local", () => {
+    if (!process.env.VITE_DEV_SERVER_URL) throw new Error("Reset local esta disponivel apenas em desenvolvimento.");
+    const auth = db.getAuthState();
+    if (!auth.user || !["owner", "admin"].includes(auth.user.role)) {
+      throw new Error("Reset local exige usuario Dono ou Administrador em desenvolvimento.");
+    }
+    const markerPath = requestLocalResetOnNextStart();
+    db.recordAuditEvent({ action: "reset instalacao local solicitado", actor: auth.user.name, details: markerPath });
+    sync.stop();
+    setTimeout(() => {
+      app.relaunch();
+      app.exit(0);
+    }, 150);
+    return { ok: true, restarting: true, markerPath };
+  });
   ipcMain.handle("pix:config", () => db.getPixConfig());
   ipcMain.handle("pix:save-config", (_event, input) => db.savePixConfig(input));
   ipcMain.handle("pix:test-connection", () => db.testPixConnection());

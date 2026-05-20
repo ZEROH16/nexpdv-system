@@ -263,7 +263,8 @@ export const desktopApi = {
     security: () => window.nexpdv.system.security<SecurityState>(),
     backupState: () => window.nexpdv.system.backupState<BackupState>(),
     backupExport: () => window.nexpdv.system.backupExport<BackupState & { filePath: string }>(),
-    backupRestore: (filePath: string) => window.nexpdv.system.backupRestore<BackupState>(filePath)
+    backupRestore: (filePath: string) => window.nexpdv.system.backupRestore<BackupState>(filePath),
+    resetLocal: () => window.nexpdv.system.resetLocal<{ ok: boolean; restarting: boolean; markerPath: string }>()
   },
   pix: {
     getPixConfig: () => window.nexpdv.pix.config<PixConfig>(),

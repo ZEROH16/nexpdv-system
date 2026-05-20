@@ -4,6 +4,7 @@ import path from "node:path";
 import { LocalDatabase } from "./localDatabase";
 import { registerIpcHandlers } from "./ipc";
 import { SyncEngine } from "./syncEngine";
+import { resetLocalDataIfRequested } from "./devResetLocal";
 
 const bootstrapLogPath = path.join(process.cwd(), "electron-main.log");
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -70,6 +71,7 @@ const createWindow = async (): Promise<void> => {
   await splashWindow.loadFile(getSplashPath()).catch((error) => logMain(`Splash ignorado: ${getSplashPath()}`, error));
 
   nativeTheme.themeSource = "system";
+  resetLocalDataIfRequested(logMain);
   logMain("Inicializando banco local.");
   const db = new LocalDatabase();
   await db.initialize();

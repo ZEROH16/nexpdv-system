@@ -104,6 +104,7 @@ export const Settings = () => {
   const { data: pixConfig, refresh: refreshPix } = useAsync(() => desktopApi.pix.getPixConfig(), []);
   const { data: fiscalConfig, refresh: refreshFiscal } = useAsync(() => desktopApi.fiscal.getFiscalConfig(), []);
   const { data: security } = useAsync(() => desktopApi.system.security(), []);
+  const { data: authState } = useAsync(() => desktopApi.auth.state(), []);
   const { data: securitySettings, refresh: refreshSecuritySettings } = useAsync(() => desktopApi.auth.securitySettings(), []);
   const { data: printers, error: printersError, refresh: refreshPrinters } = useAsync(() => desktopApi.printers.list(), []);
 
@@ -159,6 +160,7 @@ export const Settings = () => {
   const cloudEnabled = Boolean(license?.features?.cloud ?? systemState?.cloudEnabled);
   const pixEnabled = Boolean(license?.features?.pix ?? license?.pixEnabled);
   const fiscalEnabled = Boolean(license?.features?.fiscal ?? license?.fiscalEnabled);
+  const canResetLocalInstallation = import.meta.env.DEV && ["owner", "admin"].includes(authState?.user?.role ?? "");
 
   const saveCompany = async () => {
     try {
@@ -308,6 +310,20 @@ export const Settings = () => {
     await desktopApi.auth.saveSecuritySettings(securityForm);
     setMessage("Configuracoes de seguranca salvas.");
     refreshSecuritySettings();
+  };
+
+  const resetLocalInstallation = async () => {
+    const answer = window.prompt("Digite RESETAR para apagar a instalacao local de desenvolvimento e reiniciar o NexPDV.");
+    if (answer !== "RESETAR") {
+      setMessage("Reset local cancelado.");
+      return;
+    }
+    try {
+      await desktopApi.system.resetLocal();
+      setMessage("Reset local solicitado. O NexPDV sera reiniciado e voltara para a ativacao inicial.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel solicitar o reset local.");
+    }
   };
 
   return (
@@ -624,15 +640,33 @@ export const Settings = () => {
       ) : null}
 
       {tab === "support" ? (
-        <section className="panel p-6">
-          <div className="flex items-start gap-4">
-            <HelpCircle size={24} />
-            <div>
-              <h2 className="text-lg font-black">Suporte NexPDV</h2>
-              <p className="mt-2 text-sm text-slate-500">WhatsApp: (00) 00000-0000</p>
-              <p className="text-sm text-slate-500">Email: suporte@nexpdv.com.br</p>
+        <section className="grid gap-4">
+          <div className="panel p-6">
+            <div className="flex items-start gap-4">
+              <HelpCircle size={24} />
+              <div>
+                <h2 className="text-lg font-black">Suporte NexPDV</h2>
+                <p className="mt-2 text-sm text-slate-500">WhatsApp: (00) 00000-0000</p>
+                <p className="text-sm text-slate-500">Email: suporte@nexpdv.com.br</p>
+              </div>
             </div>
           </div>
+          {canResetLocalInstallation ? (
+            <div className="panel border-red-200 p-6 dark:border-red-900">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-black text-red-700 dark:text-red-200">Resetar instalacao local</h2>
+                  <p className="mt-2 max-w-2xl text-sm text-slate-500">
+                    Remove dados locais de desenvolvimento deste desktop, incluindo banco local, licenca, sessao, cache Electron e onboarding. API SaaS, painel admin e banco cloud nao sao alterados.
+                  </p>
+                  <p className="mt-2 text-xs font-semibold text-slate-500">Visivel somente em desenvolvimento para Dono/Admin local.</p>
+                </div>
+                <Button variant="danger" onClick={resetLocalInstallation}>
+                  <RefreshCcw size={16} />Resetar instalacao local
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
