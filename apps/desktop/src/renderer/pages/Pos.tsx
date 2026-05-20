@@ -1,4 +1,4 @@
-import { Banknote, CreditCard, LockKeyhole, Maximize2, Minimize2, Minus, Pin, Plus, QrCode, Search, Trash2, User, UserRoundCog, X } from "lucide-react";
+import { Banknote, Clock3, CreditCard, Keyboard, LockKeyhole, Maximize2, Minimize2, Minus, Pin, Plus, QrCode, Search, Trash2, User, UserRoundCog, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Customer, PaymentMethod, PixCharge, Product } from "@nexpdv/shared";
 import { formatCurrency, roundMoney } from "@nexpdv/shared";
@@ -10,9 +10,9 @@ import { useHotkeys } from "@/hooks/useHotkeys";
 import { desktopApi } from "@/services/desktopApi";
 import { getCartTotals, usePdvStore } from "@/store/usePdvStore";
 
-const paymentOptions: Array<{ method: PaymentMethod; label: string; icon: typeof Banknote }> = [
-  { method: "cash", label: "Dinheiro", icon: Banknote },
-  { method: "pix", label: "Pix", icon: QrCode },
+const paymentOptions: Array<{ method: PaymentMethod; label: string; icon: typeof Banknote; shortcut?: string }> = [
+  { method: "cash", label: "Dinheiro", icon: Banknote, shortcut: "F8" },
+  { method: "pix", label: "Pix", icon: QrCode, shortcut: "F9" },
   { method: "debit", label: "Debito", icon: CreditCard },
   { method: "credit", label: "Credito", icon: CreditCard },
   { method: "store_credit", label: "Fiado", icon: User }
@@ -34,8 +34,15 @@ const pixStatusLabel = {
   error: "erro"
 };
 
+const ShortcutBadge = ({ children }: { children: string }) => (
+  <span className="inline-flex h-6 min-w-8 items-center justify-center rounded-md border border-blue-400/25 bg-blue-500/10 px-2 text-[11px] font-black uppercase text-cobalt shadow-sm dark:border-blue-300/20 dark:bg-blue-400/10 dark:text-blue-200">
+    {children}
+  </span>
+);
+
 export const Pos = () => {
   const barcodeRef = useRef<HTMLInputElement>(null);
+  const customerSearchRef = useRef<HTMLInputElement>(null);
   const discountRef = useRef<HTMLInputElement>(null);
   const productSearchRef = useRef<HTMLInputElement>(null);
   const pixAutoFinalizeRef = useRef<string>();
@@ -55,6 +62,7 @@ export const Pos = () => {
   const [pixQrLoading, setPixQrLoading] = useState(false);
   const [pixQrError, setPixQrError] = useState<string>();
   const [managerDiscountOpen, setManagerDiscountOpen] = useState(false);
+  const [moreOptionsOpen, setMoreOptionsOpen] = useState(false);
   const [managerCredential, setManagerCredential] = useState("");
   const [managerLogin, setManagerLogin] = useState("");
   const [managerCredentialMode, setManagerCredentialMode] = useState<"pin" | "password">("pin");
@@ -71,6 +79,7 @@ export const Pos = () => {
   const [loadingScan, setLoadingScan] = useState(false);
   const [loadingCheckout, setLoadingCheckout] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [clockNow, setClockNow] = useState(() => new Date());
   const store = usePdvStore();
   const focusMode = store.focusMode;
   const sidebarPinned = store.sidebarPinned;
@@ -119,10 +128,31 @@ export const Pos = () => {
     !pixNotConfigured &&
     !pixWaitingPayment;
   const canOpenPayment = store.cart.length > 0 && canSell && !cashClosedBlocksSale;
+  const nonPaymentOverlayOpen = managerDiscountOpen || creditAuthOpen || operatorSwitchOpen || moreOptionsOpen || miscOpen || productDrawerOpen;
+  const clockTime = clockNow.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const clockDate = clockNow.toLocaleDateString("pt-BR");
+  const shortcuts = [
+    ["F1", "Busca"],
+    ["F2", "Produtos"],
+    ["F3", "Cliente"],
+    ["F4", "Diverso"],
+    ["F5", "Finalizar"],
+    ["F6", "Limpar"],
+    ["F7", "Desconto"],
+    ["F8", "Dinheiro"],
+    ["F9", "Pix"],
+    ["F10", "Opcoes"],
+    ["Esc", "Voltar"]
+  ];
 
   useEffect(() => {
     barcodeRef.current?.focus();
   }, [focusMode]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockNow(new Date()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!paymentOpen || paymentMethod !== "pix") return;
@@ -228,6 +258,29 @@ export const Pos = () => {
     setHighDiscountAuthorizationToken(undefined);
     setStoreCreditAuthorizationToken(undefined);
     refocusBarcode();
+  };
+
+  const closeActiveOverlay = (): boolean => {
+    if (managerDiscountOpen) {
+      setManagerDiscountOpen(false);
+      setDiscountError(undefined);
+    } else if (creditAuthOpen) {
+      setCreditAuthOpen(false);
+    } else if (operatorSwitchOpen) {
+      setOperatorSwitchOpen(false);
+    } else if (moreOptionsOpen) {
+      setMoreOptionsOpen(false);
+    } else if (paymentOpen) {
+      setPaymentOpen(false);
+    } else if (miscOpen) {
+      setMiscOpen(false);
+    } else if (productDrawerOpen) {
+      setProductDrawerOpen(false);
+    } else {
+      return false;
+    }
+    refocusBarcode();
+    return true;
   };
 
   const toggleFocusMode = () => {
@@ -395,7 +448,7 @@ export const Pos = () => {
     }
   };
 
-  const openPayment = () => {
+  const openPayment = (method = paymentMethod) => {
     if (!store.cart.length) return;
     if (!canSell) {
       setMessage("Operador sem permissao para vender. Solicite acesso de gerente/admin.");
@@ -405,8 +458,9 @@ export const Pos = () => {
       setMessage("Caixa fechado. Abra o caixa antes de finalizar vendas.");
       return;
     }
+    setPaymentMethod(method);
     setPixCharge(undefined);
-    setCashReceived(paymentMethod === "cash" ? totals.total : 0);
+    setCashReceived(method === "cash" ? totals.total : 0);
     setPaymentOpen(true);
   };
 
@@ -464,24 +518,44 @@ export const Pos = () => {
   }, [loadingCheckout, paymentMethod, paymentOpen, pixCharge?.id, pixCharge?.status]);
 
   useHotkeys({
-    F2: () => setProductDrawerOpen(true),
+    F1: () => refocusBarcode(),
+    F2: () => {
+      if (!paymentOpen && !nonPaymentOverlayOpen) setProductDrawerOpen(true);
+    },
+    F3: () => {
+      if (nonPaymentOverlayOpen) return;
+      if (focusMode && paymentMethod !== "store_credit") setPaymentMethod("store_credit");
+      window.setTimeout(() => customerSearchRef.current?.focus(), 50);
+    },
     F4: () => {
+      if (!paymentOpen && !nonPaymentOverlayOpen) setMiscOpen(true);
+    },
+    F5: () => {
+      if (nonPaymentOverlayOpen) return;
       if (paymentOpen && canConfirmPayment) void finalizeSale();
       else openPayment();
     },
-    F6: () => discountRef.current?.focus(),
-    F8: () => discountRef.current?.focus(),
-    F9: () => setMiscOpen(true),
-    Escape: () => {
-      if (managerDiscountOpen) setManagerDiscountOpen(false);
-      else if (creditAuthOpen) setCreditAuthOpen(false);
-      else if (operatorSwitchOpen) setOperatorSwitchOpen(false);
-      else if (paymentOpen) setPaymentOpen(false);
-      else if (miscOpen) setMiscOpen(false);
-      else if (productDrawerOpen) setProductDrawerOpen(false);
-      refocusBarcode();
+    F6: () => {
+      if (!closeActiveOverlay() && store.cart.length) clearCurrentSale();
     },
-    "Ctrl+f": () => setProductDrawerOpen(true)
+    F7: () => {
+      if (!paymentOpen && !nonPaymentOverlayOpen) discountRef.current?.focus();
+    },
+    F8: () => {
+      if (!nonPaymentOverlayOpen) openPayment("cash");
+    },
+    F9: () => {
+      if (!nonPaymentOverlayOpen) openPayment("pix");
+    },
+    F10: () => {
+      if (!paymentOpen && !nonPaymentOverlayOpen) setMoreOptionsOpen(true);
+    },
+    Escape: () => {
+      closeActiveOverlay();
+    },
+    "Ctrl+f": () => {
+      if (!paymentOpen && !nonPaymentOverlayOpen) setProductDrawerOpen(true);
+    }
   });
 
   return (
@@ -523,10 +597,12 @@ export const Pos = () => {
           </div>
           <div className="mt-2 flex gap-3">
             <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" size={focusMode ? 26 : 22} />
+              <div className={`pointer-events-none absolute inset-y-0 left-0 flex ${focusMode ? "w-16" : "w-14"} items-center justify-center text-slate-400`}>
+                <Search size={focusMode ? 26 : 22} />
+              </div>
               <input
                 ref={barcodeRef}
-                className={`field w-full !pl-16 pr-5 font-semibold ${focusMode ? "h-20 text-3xl shadow-soft" : "h-16 text-2xl"}`}
+                className={`field w-full pr-5 font-semibold ${focusMode ? "h-20 pl-16 text-3xl shadow-soft" : "h-16 pl-14 text-2xl"}`}
                 value={barcode}
                 onChange={(event) => setBarcode(event.target.value)}
                 onKeyDown={(event) => {
@@ -543,13 +619,25 @@ export const Pos = () => {
               Adicionar
             </Button>
             <Button className={`${focusMode ? "h-20 px-5" : "h-16 px-5"}`} variant="secondary" onClick={() => setProductDrawerOpen(true)}>
-              Buscar produtos
+              <span>Buscar produtos</span><ShortcutBadge>F2</ShortcutBadge>
             </Button>
             <Button className={`${focusMode ? "h-20 px-5" : "h-16 px-5"}`} variant="secondary" onClick={() => setMiscOpen(true)}>
-              Produto diverso
+              <span>Produto diverso</span><ShortcutBadge>F4</ShortcutBadge>
             </Button>
           </div>
           {message ? <div className="mt-3 rounded-lg bg-slate-100 px-3 py-2 text-sm dark:bg-slate-950">{message}</div> : null}
+          <div className="mt-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-950">
+            <div className="mr-1 flex items-center gap-2 text-xs font-black uppercase text-slate-500">
+              <Keyboard size={14} />
+              Atalhos
+            </div>
+            {shortcuts.map(([key, label]) => (
+              <div key={key} className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-300">
+                <ShortcutBadge>{key}</ShortcutBadge>
+                <span>{label}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -559,7 +647,7 @@ export const Pos = () => {
               <p className="text-sm text-slate-500">{store.cart.length ? `${store.cart.length} item(ns) no carrinho` : "Venda aguardando produtos"}</p>
             </div>
             {!focusMode ? <Button variant="ghost" disabled={!store.cart.length} onClick={clearCurrentSale}>
-              Limpar venda
+              <span>Limpar venda</span><ShortcutBadge>F6</ShortcutBadge>
             </Button> : null}
           </div>
 
@@ -631,11 +719,19 @@ export const Pos = () => {
       </section>
 
       <aside className={`panel flex min-h-0 flex-col overflow-hidden ${focusMode ? "ring-1 ring-blue-500/20" : ""}`}>
-        {(!focusMode || paymentMethod === "store_credit") ? (
-        <div className="border-b border-slate-200 p-5 dark:border-slate-800">
-          <h2 className="text-lg font-black">Resumo</h2>
-          <div className="mt-4 grid gap-3">
-            <input className="field" placeholder="Buscar cliente" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} />
+        <div className={`border-b border-slate-200 dark:border-slate-800 ${focusMode ? "p-4" : "p-5"}`}>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-lg font-black">Resumo</h2>
+            <div className="flex items-center gap-2 rounded-lg border border-blue-400/20 bg-slate-950 px-3 py-2 text-right text-white shadow-soft dark:bg-white/5">
+              <Clock3 size={16} className="text-blue-300" />
+              <div>
+                <div className="font-mono text-lg font-black leading-none tracking-normal text-white">{clockTime}</div>
+                <div className="mt-0.5 text-[10px] font-bold leading-none text-blue-200/80">{clockDate}</div>
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-3">
+            <input ref={customerSearchRef} className="field" placeholder="Buscar cliente" value={customerSearch} onChange={(event) => setCustomerSearch(event.target.value)} />
             <select
               className="field"
               value={store.customer?.id ?? ""}
@@ -651,9 +747,8 @@ export const Pos = () => {
             {selectedCustomer ? <div className="text-xs text-slate-500">Limite fiado: {formatCurrency(selectedCustomer.creditLimit)} - Saldo {formatCurrency(selectedCustomer.balance)}</div> : null}
           </div>
         </div>
-        ) : null}
 
-        <div className="flex-1 space-y-4 overflow-auto p-5">
+        <div className={`flex-1 space-y-4 overflow-auto ${focusMode ? "p-4" : "p-5"}`}>
           <section>
             <div className="text-xs font-bold uppercase text-slate-500">Forma de pagamento</div>
             <div className="mt-2 grid grid-cols-2 gap-2">
@@ -677,6 +772,7 @@ export const Pos = () => {
                   >
                     <Icon size={16} />
                     {option.label}
+                    {option.shortcut ? <ShortcutBadge>{option.shortcut}</ShortcutBadge> : null}
                   </button>
                 );
               })}
@@ -684,7 +780,10 @@ export const Pos = () => {
           </section>
 
           <label className="text-sm font-semibold">
-            Desconto (%)
+            <span className="flex items-center justify-between">
+              <span>Desconto (%)</span>
+              <ShortcutBadge>F7</ShortcutBadge>
+            </span>
             <input
               ref={discountRef}
               className="field mt-1 w-full"
@@ -736,11 +835,58 @@ export const Pos = () => {
             <div className="text-xs font-bold uppercase text-slate-500">Total final</div>
             <div className={`mt-1 font-black tracking-normal ${focusMode ? "text-6xl text-mint" : "text-5xl"}`}>{formatCurrency(totals.total)}</div>
           </div>
-          <Button className={`${focusMode ? "mt-6 h-16" : "mt-5 h-14"} w-full text-base`} disabled={!canOpenPayment} onClick={openPayment}>
-            Finalizar venda
+          <Button className={`${focusMode ? "mt-6 h-16" : "mt-5 h-14"} w-full text-base`} disabled={!canOpenPayment} onClick={() => openPayment()}>
+            <span>Finalizar venda</span><ShortcutBadge>F5</ShortcutBadge>
           </Button>
         </div>
       </aside>
+
+      {moreOptionsOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-8">
+          <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-2xl dark:bg-slate-950">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-black">Mais opcoes</h2>
+                <p className="mt-1 text-sm text-slate-500">Acoes rapidas para operacao do caixa.</p>
+              </div>
+              <button className="rounded-lg p-2 hover:bg-slate-100 dark:hover:bg-slate-900" onClick={() => setMoreOptionsOpen(false)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-2">
+              <Button variant="secondary" className="justify-between" onClick={() => {
+                setMoreOptionsOpen(false);
+                toggleFocusMode();
+              }}>
+                <span>{focusMode ? "Sair do modo foco" : "Ativar modo foco"}</span>
+                {focusMode ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+              </Button>
+              <Button variant="secondary" className="justify-between" onClick={() => {
+                setMoreOptionsOpen(false);
+                setOperatorSwitchForm((current) => ({ ...current, login: authState?.lastOperatorLogin ?? "" }));
+                setOperatorSwitchOpen(true);
+              }}>
+                <span>Trocar operador</span>
+                <UserRoundCog size={17} />
+              </Button>
+              <Button variant="secondary" className="justify-between" onClick={() => {
+                setMoreOptionsOpen(false);
+                void lockPdv();
+              }}>
+                <span>Bloquear PDV</span>
+                <LockKeyhole size={17} />
+              </Button>
+              <Button variant="danger" className="justify-between" disabled={!store.cart.length} onClick={() => {
+                setMoreOptionsOpen(false);
+                clearCurrentSale();
+              }}>
+                <span>Limpar venda</span>
+                <ShortcutBadge>F6</ShortcutBadge>
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {managerDiscountOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-8">

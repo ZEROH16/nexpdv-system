@@ -1,6 +1,14 @@
 import { useEffect } from "react";
 
-export const useHotkeys = (bindings: Record<string, () => void>) => {
+type HotkeyAction = (event: KeyboardEvent) => void;
+
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+};
+
+export const useHotkeys = (bindings: Record<string, HotkeyAction>) => {
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       const key = [
@@ -13,8 +21,10 @@ export const useHotkeys = (bindings: Record<string, () => void>) => {
         .join("+");
       const action = bindings[key] ?? bindings[event.key];
       if (action) {
+        const isFunctionKey = /^F\d{1,2}$/.test(event.key);
+        if (isEditableTarget(event.target) && !isFunctionKey && event.key !== "Escape") return;
         event.preventDefault();
-        action();
+        action(event);
       }
     };
     window.addEventListener("keydown", handler);
