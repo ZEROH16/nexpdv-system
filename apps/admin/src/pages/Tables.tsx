@@ -291,7 +291,7 @@ export const Licenses = () => {
           ]} />]
         ]} />
       </DataState>
-      {creating ? <Modal title="Gerar licenca" onClose={() => setCreating(false)}><Form fields={licenseCreateFields(companies.data ?? [], plans.data ?? [])} value={{ companyId: "", planCode: "PRO", validUntil: "2027-12-31" }} onSubmit={generate} /></Modal> : null}
+      {creating ? <Modal title="Gerar licenca" size="sm" onClose={() => setCreating(false)}><Form fields={licenseCreateFields(companies.data ?? [], plans.data ?? [])} value={{ companyId: "", planCode: "PRO", validUntil: "2027-12-31" }} onSubmit={generate} /></Modal> : null}
       {editing ? <Modal title="Editar licenca" onClose={() => setEditing(undefined)}><LicenseForm value={editing} onSubmit={save} /></Modal> : null}
     </Page>
   );
@@ -583,14 +583,25 @@ const Table = ({ rows, columns }: { rows: any[]; columns: Array<[string, (row: a
   </section>
 );
 
-const Modal = ({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
-    <section className="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-lg border border-white/10 bg-[#0D1320] p-6 shadow-panel">
-      <div className="mb-5 flex items-center justify-between"><h2 className="text-xl font-black">{title}</h2><button className="rounded-lg bg-white/10 px-3 py-2 text-sm font-black" onClick={onClose}>Fechar</button></div>
-      {children}
-    </section>
-  </div>
-);
+const Modal = ({ title, children, onClose, size = "lg" }: { title: string; children: ReactNode; onClose: () => void; size?: "sm" | "lg" }) => {
+  const panelRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const field = panelRef.current?.querySelector<HTMLElement>("select, input:not([type='hidden']), textarea");
+    const id = window.setTimeout(() => field?.focus(), 80);
+    return () => window.clearTimeout(id);
+  }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm sm:p-6">
+      <section ref={panelRef} className={`modal-panel max-h-[90vh] w-full overflow-auto rounded-lg border border-white/10 bg-[#0D1320] p-6 shadow-panel ${size === "sm" ? "max-w-xl" : "max-w-4xl"}`}>
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <h2 className="text-xl font-black">{title}</h2>
+          <button className="rounded-lg bg-white/10 px-3 py-2 text-sm font-black hover:bg-white/15" type="button" onClick={onClose}>Fechar</button>
+        </div>
+        {children}
+      </section>
+    </div>
+  );
+};
 
 const ConfirmDialog = ({ state, onClose }: { state: ConfirmState; onClose: () => void }) => {
   const [text, setText] = useState("");
@@ -677,7 +688,7 @@ const Form = ({ fields, value, onSubmit }: { fields: Field[]; value: any; onSubm
   return (
     <form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => { event.preventDefault(); void onSubmit(form); }}>
       {fields.map((field) => <FieldControl key={field.key} field={field} form={form} setForm={setForm} />)}
-      <div className="md:col-span-2"><button className="h-11 rounded-lg bg-white px-5 text-sm font-black text-ink">Salvar</button></div>
+      <div className="flex justify-end md:col-span-2"><button className="h-11 rounded-lg bg-white px-5 text-sm font-black text-ink">Salvar</button></div>
     </form>
   );
 };
@@ -685,14 +696,14 @@ const Form = ({ fields, value, onSubmit }: { fields: Field[]; value: any; onSubm
 const FieldControl = ({ field, form, setForm }: { field: Field; form: any; setForm: (input: any) => void }) => {
   const value = form[field.key] ?? (field.type === "checkbox" ? false : "");
   const set = (next: unknown) => setForm({ ...form, [field.key]: next });
-  if (field.type === "select") return <label className="grid gap-1 text-xs font-black text-slate-400">{field.label}<select className="field" value={value} onChange={(event) => set(event.target.value)}>{field.options?.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>;
+  if (field.type === "select") return <label className="grid gap-1 text-xs font-black text-slate-400">{field.label}<select className="field admin-select" value={value} onChange={(event) => set(event.target.value)}>{field.options?.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>;
   if (field.type === "textarea") return <label className="grid gap-1 text-xs font-black text-slate-400 md:col-span-2">{field.label}<textarea className="field min-h-24" value={value} onChange={(event) => set(event.target.value)} /></label>;
   if (field.type === "checkbox") return <label className="mt-5 flex items-center gap-2 text-sm font-bold text-slate-300"><input type="checkbox" checked={Boolean(value)} onChange={(event) => set(event.target.checked)} />{field.label}</label>;
   return <label className="grid gap-1 text-xs font-black text-slate-400">{field.label}<input className="field" type={field.type ?? "text"} value={value} onChange={(event) => set(field.type === "number" ? Number(event.target.value) : event.target.value)} /></label>;
 };
 
 const SmallSelect = ({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: Array<{ value: string; label: string }> }) => (
-  <select className="h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-xs font-bold text-slate-200 outline-none" value={value} onChange={(event) => onChange(event.target.value)}>
+  <select className="admin-select h-9 rounded-lg border border-white/10 bg-white/5 px-3 text-xs font-bold text-slate-200 outline-none focus:border-cobalt focus:ring-4 focus:ring-blue-500/20" value={value} onChange={(event) => onChange(event.target.value)}>
     {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
   </select>
 );

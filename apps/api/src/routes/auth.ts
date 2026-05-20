@@ -160,6 +160,10 @@ export const authRoutes = async (app: FastifyInstance) => {
     }
 
     if (user.twoFactorEnabled) {
+      const hasSecondFactor = Boolean(input.twoFactorCode?.trim() || input.recoveryCode?.trim());
+      if (!hasSecondFactor) {
+        return reply.code(401).send({ message: "Digite o codigo do autenticador.", requiresTwoFactor: true });
+      }
       const recovery = await validateRecoveryCode(user.recoveryCodesHash, input.recoveryCode);
       const valid2fa = user.twoFactorSecret && input.twoFactorCode ? verifyTotp(user.twoFactorSecret, input.twoFactorCode) : false;
       if (!valid2fa && !recovery.ok) {

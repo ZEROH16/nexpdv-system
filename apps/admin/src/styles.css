@@ -13,6 +13,46 @@ body {
   @apply h-11 rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white shadow-sm outline-none placeholder:text-slate-500 focus:border-cobalt focus:ring-4 focus:ring-blue-500/20;
 }
 
+.admin-select,
+select.field {
+  color: #f8fafc;
+  background-color: rgba(255, 255, 255, 0.06);
+  color-scheme: dark;
+}
+
+.admin-select option,
+select.field option {
+  color: #f8fafc;
+  background-color: #0d1320;
+}
+
+.admin-select option:checked,
+select.field option:checked {
+  color: #ffffff;
+  background-color: #2563eb;
+}
+
+.admin-select option:hover,
+select.field option:hover {
+  color: #ffffff;
+  background-color: #1d4ed8;
+}
+
+.modal-panel {
+  animation: modal-in 160ms ease-out;
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .panel {
   @apply rounded-lg border border-white/10 bg-[#0D1320] shadow-panel;
 }
