@@ -76,11 +76,14 @@ npm run dev -w @nexpdv/admin
 npm run dev -w @nexpdv/mobile
 ```
 
-Login demo:
+No Desktop, a primeira abertura exige ativacao da licenca e depois cria o acesso do dono da empresa. Usuarios demo do PDV
+so sao criados quando `NODE_ENV=development` e `DESKTOP_DEV_USERS=true`.
 
-- Email: `admin@nexpdv.com.br`
-- Senha: `123456`
-- Licenca local: `NEXPDV-2026`
+Para resetar a instalacao local de desenvolvimento do Desktop e testar a ativacao do zero:
+
+```bash
+npm run desktop:reset-local -w @nexpdv/desktop -- --force
+```
 
 ## Primeiro Acesso Do Admin SaaS
 
@@ -116,6 +119,20 @@ npm run dist
 ```
 
 O comando `npm run dist` gera o instalador Windows do PDV via `electron-builder`.
+
+## Atualizacao Do Desktop
+
+O Desktop possui base de auto update com `electron-updater`. Em desenvolvimento, fica desabilitado por padrao.
+
+Variaveis principais:
+
+```bash
+AUTO_UPDATE_ENABLED=false
+UPDATE_PROVIDER_URL=""
+UPDATE_CHANNEL="stable"
+```
+
+A API expoe `/updates/latest` para distribuir metadados futuros de versao, changelog, canal e URL de download.
 
 ## Fluxo Offline-First
 

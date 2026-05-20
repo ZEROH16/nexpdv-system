@@ -48,6 +48,20 @@ export interface SyncState {
   lastError?: string;
 }
 
+export interface UpdateState {
+  enabled: boolean;
+  channel: "stable" | "beta" | "dev";
+  providerUrl?: string;
+  currentVersion: string;
+  status: "disabled" | "idle" | "checking" | "available" | "not_available" | "downloading" | "downloaded" | "error";
+  version?: string;
+  releaseDate?: string;
+  releaseNotes?: string;
+  progress?: number;
+  message: string;
+  checkedAt?: string;
+}
+
 export interface CashSummary {
   cashRegister?: CashRegister;
   salesTotal: number;
@@ -60,6 +74,10 @@ export interface CashSummary {
 
 export interface SystemState {
   activated: boolean;
+  ownerOnboardingRequired: boolean;
+  ownerEmail?: string;
+  devUsersEnabled: boolean;
+  appVersion: string;
   cloudEnabled: boolean;
   allowSalesWithoutCashRegister: boolean;
   usePermissions: boolean;
@@ -161,6 +179,16 @@ export interface SaveUserInput {
   permissionOverrides?: Array<{ permission: string; effect: "allow" | "deny" }>;
 }
 
+export interface OwnerOnboardingInput {
+  name: string;
+  email: string;
+  username: string;
+  password: string;
+  confirmPassword: string;
+  pin: string;
+  confirmPin: string;
+}
+
 export interface SaveRoleInput {
   id?: string;
   name: string;
@@ -227,6 +255,14 @@ export const desktopApi = {
     flush: () => window.nexpdv.sync.flush<SyncState>(),
     onStatus: window.nexpdv.sync.onStatus
   },
+  updates: {
+    status: () => window.nexpdv.updates.status<UpdateState>(),
+    check: () => window.nexpdv.updates.check<UpdateState>(),
+    download: () => window.nexpdv.updates.download<UpdateState>(),
+    install: () => window.nexpdv.updates.install<UpdateState>(),
+    remindLater: () => window.nexpdv.updates.remindLater<UpdateState>(),
+    onStatus: window.nexpdv.updates.onStatus
+  },
   license: {
     check: () => window.nexpdv.license.check<LicenseCheckResult>()
   },
@@ -253,6 +289,7 @@ export const desktopApi = {
   system: {
     state: () => window.nexpdv.system.state<SystemState>(),
     activate: (input: { ownerEmail: string; licenseKey: string; companyName: string }) => window.nexpdv.system.activate<SystemState>(input),
+    createOwnerAccess: (input: OwnerOnboardingInput) => window.nexpdv.system.createOwnerAccess<SecurityState["users"][number]>(input),
     settings: (input: { usePermissions?: boolean; locationControl?: boolean; allowSalesWithoutCashRegister?: boolean; blockNegativeStock?: boolean; automaticBackupEnabled?: boolean; backupPath?: string; receiptWidthMm?: 58 | 80; receiptPrinterName?: string; receiptFooterMessage?: string; receiptAutoPrint?: boolean }) => window.nexpdv.system.settings<SystemState>(input),
     cloud: (input: { cloudKey: string; ownerEmail: string }) => window.nexpdv.system.cloud<SystemState>(input),
     company: (input: Partial<Company>) => window.nexpdv.system.company<Partial<Company>>(input),

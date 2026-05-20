@@ -43,6 +43,9 @@ const ADMIN_ID = "usr_admin_demo";
 const MANAGER_ID = "usr_gerente_demo";
 const OPERATOR_ID = "usr_operador_demo";
 const OPERATOR_NAME = "Operador Caixa";
+const DEV_USER_IDS = [OWNER_ID, ADMIN_ID, MANAGER_ID, OPERATOR_ID];
+
+const desktopDevUsersEnabled = (): boolean => process.env.NODE_ENV === "development" && process.env.DESKTOP_DEV_USERS === "true";
 
 const userSeeds = [
   { id: OWNER_ID, username: "dono", name: "Dono NexPDV", email: "dono@nexpdv.com.br", phone: "", roleId: "role_owner", role: "owner", sector: "Gerencia", password: "123456", pin: "2026", notes: "Usuario dono inicial" },
@@ -126,6 +129,16 @@ export interface ActivationInput {
   companyName: string;
 }
 
+export interface OwnerOnboardingInput {
+  name: string;
+  email: string;
+  username: string;
+  password: string;
+  confirmPassword: string;
+  pin: string;
+  confirmPin: string;
+}
+
 export interface CloudActivationInput {
   cloudKey: string;
   ownerEmail: string;
@@ -133,6 +146,10 @@ export interface CloudActivationInput {
 
 export interface SystemState {
   activated: boolean;
+  ownerOnboardingRequired: boolean;
+  ownerEmail?: string;
+  devUsersEnabled: boolean;
+  appVersion: string;
   cloudEnabled: boolean;
   allowSalesWithoutCashRegister: boolean;
   usePermissions: boolean;
@@ -1369,8 +1386,13 @@ export class LocalDatabase {
     const backup = this.getBackupState();
     const license = this.getLicense() as SystemState["license"];
     const licenseCheck = checkStoredLicense(license);
+    const activated = this.getSetting("system_activated") === "true" && licenseCheck.valid;
     return {
-      activated: this.getSetting("system_activated") === "true" && licenseCheck.valid,
+      activated,
+      ownerOnboardingRequired: activated && this.isOwnerOnboardingRequired(),
+      ownerEmail: licenseCheck.ownerEmail ?? this.getCompany().ownerEmail,
+      devUsersEnabled: desktopDevUsersEnabled(),
+      appVersion: app.getVersion(),
       cloudEnabled: licenseCheck.cloudEnabled,
       allowSalesWithoutCashRegister: this.getSetting("allow_sales_without_cash_register") === "true",
       usePermissions: this.getSetting("use_permissions") === "true",
@@ -1422,6 +1444,71 @@ export class LocalDatabase {
     this.recordAudit("licenca ativada", license.ownerEmail, `${activationMode}: ${license.plan}: ${license.key}`);
     this.recordAudit("sistema ativado", license.ownerEmail, license.establishmentName);
     return this.getSystemState();
+  }
+
+  createOwnerAccess(input: OwnerOnboardingInput): UserAccount {
+    if (this.getSetting("system_activated") !== "true") {
+      throw new Error("Ative o NexPDV antes de criar o acesso do dono.");
+    }
+    const license = this.getLicense() as LocalLicenseRecord | undefined;
+    const licenseCheck = checkStoredLicense(license);
+    if (!licenseCheck.valid || !license) {
+      throw new Error("Licenca local invalida. Refaca a ativacao antes do primeiro acesso.");
+    }
+    if (!this.isOwnerOnboardingRequired()) {
+      throw new Error("O acesso do dono ja foi configurado.");
+    }
+
+    const name = input.name.trim();
+    const email = input.email.trim().toLowerCase();
+    const username = normalizeLogin(input.username);
+    if (!name) throw new Error("Informe o nome do dono.");
+    if (!email || !/^\S+@\S+\.\S+$/.test(email)) throw new Error("Informe um email valido.");
+    if (license.ownerEmail && license.ownerEmail.trim().toLowerCase() !== email) {
+      throw new Error("O email do dono precisa ser o mesmo usado na ativacao da licenca.");
+    }
+    if (!username) throw new Error("Informe o login do dono.");
+    if (input.password.length < 8) throw new Error("A senha deve ter pelo menos 8 caracteres.");
+    if (input.password !== input.confirmPassword) throw new Error("A confirmacao de senha nao confere.");
+    if (!/^\d{4,6}$/.test(input.pin)) throw new Error("PIN deve ser numerico com 4 a 6 digitos.");
+    if (input.pin !== input.confirmPin) throw new Error("A confirmacao do PIN nao confere.");
+
+    const duplicateLogin = this.db.prepare("SELECT id FROM users WHERE company_id = ? AND lower(username) = ? LIMIT 1").get(COMPANY_ID, username);
+    if (duplicateLogin) throw new Error("Ja existe usuario com este login.");
+
+    const id = uid("usr");
+    const timestamp = now();
+    this.db
+      .prepare(
+        `INSERT INTO users (
+          id, company_id, name, username, email, phone, role, role_id, sector,
+          password_hash, pin_hash, notes, license_key, source, active, created_at, updated_at
+        ) VALUES (
+          @id, @companyId, @name, @username, @email, '', 'owner', 'role_owner', 'Administrativo',
+          @passwordHash, @pinHash, @notes, @licenseKey, 'activation_onboarding', 1, @createdAt, @updatedAt
+        )`
+      )
+      .run({
+        id,
+        companyId: COMPANY_ID,
+        name,
+        username,
+        email,
+        passwordHash: hashPassword(input.password),
+        pinHash: hashPin(input.pin),
+        notes: "Primeiro usuario dono criado apos ativacao",
+        licenseKey: license.key,
+        createdAt: timestamp,
+        updatedAt: timestamp
+      });
+    this.setSetting("owner_user_id", id);
+    this.setSetting("owner_onboarding_completed", "true");
+    this.setSetting("use_permissions", "true");
+    this.setSecuritySetting("last_operator_login", username);
+    this.recordAuthLog(id, "owner_onboarding", true, "Primeiro acesso do dono criado");
+    this.recordAudit("usuario dono criado", name, `Licenca ${license.key}`);
+    this.recordAudit("primeiro acesso concluido", name, "activation_onboarding");
+    return this.getUserAccountById(id)!;
   }
 
   activateCloud(input: CloudActivationInput): SystemState {
@@ -2106,6 +2193,18 @@ export class LocalDatabase {
     };
   }
 
+  private hasActiveOwnerOrAdmin(): boolean {
+    const row = this.db
+      .prepare("SELECT COUNT(*) as total FROM users WHERE company_id = ? AND active = 1 AND role IN ('owner', 'admin')")
+      .get(COMPANY_ID) as { total: number } | undefined;
+    return Number(row?.total ?? 0) > 0;
+  }
+
+  private isOwnerOnboardingRequired(): boolean {
+    if (this.getSetting("owner_onboarding_completed") === "true" && this.hasActiveOwnerOrAdmin()) return false;
+    return !this.hasActiveOwnerOrAdmin();
+  }
+
   private getSecuritySetting(key: string): string | undefined {
     return (this.db.prepare("SELECT value FROM security_settings WHERE company_id = ? AND key = ? LIMIT 1").get(COMPANY_ID, key) as { value: string } | undefined)?.value;
   }
@@ -2545,6 +2644,8 @@ export class LocalDatabase {
         password_hash TEXT,
         pin_hash TEXT,
         notes TEXT,
+        license_key TEXT,
+        source TEXT,
         last_access_at TEXT,
         active INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
@@ -2924,6 +3025,8 @@ export class LocalDatabase {
     addColumn("users", "pin_hash", "TEXT");
     addColumn("users", "notes", "TEXT");
     addColumn("users", "last_access_at", "TEXT");
+    addColumn("users", "license_key", "TEXT");
+    addColumn("users", "source", "TEXT");
 
     addColumn("products", "expiration_date", "TEXT");
     addColumn("products", "location_enabled", "INTEGER NOT NULL DEFAULT 0");
@@ -3035,29 +3138,45 @@ export class LocalDatabase {
       this.db.prepare("INSERT OR REPLACE INTO permissions (key, label) VALUES (?, ?)").run(key, label);
     });
 
-    const upsertUser = this.db.prepare(
-      `INSERT INTO users (id, company_id, name, username, email, phone, role, role_id, sector, password_hash, pin_hash, notes, active, created_at, updated_at)
-      VALUES (@id, @companyId, @name, @username, @email, @phone, @role, @roleId, @sector, @passwordHash, @pinHash, @notes, 1, @createdAt, @updatedAt)
-      ON CONFLICT(id) DO UPDATE SET name = @name, username = COALESCE(NULLIF(username, ''), @username),
-        email = COALESCE(NULLIF(email, ''), @email), phone = COALESCE(phone, @phone), role = @role, role_id = @roleId,
-        sector = COALESCE(NULLIF(sector, ''), @sector),
-        password_hash = CASE WHEN password_hash IS NULL OR password_hash = '' THEN @passwordHash ELSE password_hash END,
-        pin_hash = CASE WHEN pin_hash IS NULL OR pin_hash = '' THEN @pinHash ELSE pin_hash END,
-        notes = COALESCE(notes, @notes), active = 1, updated_at = @updatedAt`
-    );
-    userSeeds.forEach((user) => {
-      upsertUser.run({
-        ...user,
-        companyId: COMPANY_ID,
-        passwordHash: hashPassword(user.password),
-        pinHash: hashPin(user.pin),
-        createdAt: timestamp,
-        updatedAt: timestamp
+    if (desktopDevUsersEnabled()) {
+      const upsertUser = this.db.prepare(
+        `INSERT INTO users (id, company_id, name, username, email, phone, role, role_id, sector, password_hash, pin_hash, notes, source, active, created_at, updated_at)
+        VALUES (@id, @companyId, @name, @username, @email, @phone, @role, @roleId, @sector, @passwordHash, @pinHash, @notes, 'development_seed', 1, @createdAt, @updatedAt)
+        ON CONFLICT(id) DO UPDATE SET name = @name, username = COALESCE(NULLIF(username, ''), @username),
+          email = COALESCE(NULLIF(email, ''), @email), phone = COALESCE(phone, @phone), role = @role, role_id = @roleId,
+          sector = COALESCE(NULLIF(sector, ''), @sector),
+          password_hash = CASE WHEN password_hash IS NULL OR password_hash = '' THEN @passwordHash ELSE password_hash END,
+          pin_hash = CASE WHEN pin_hash IS NULL OR pin_hash = '' THEN @pinHash ELSE pin_hash END,
+          notes = COALESCE(notes, @notes), source = 'development_seed', active = 1, updated_at = @updatedAt`
+      );
+      userSeeds.forEach((user) => {
+        upsertUser.run({
+          ...user,
+          companyId: COMPANY_ID,
+          passwordHash: hashPassword(user.password),
+          pinHash: hashPin(user.pin),
+          createdAt: timestamp,
+          updatedAt: timestamp
+        });
       });
-    });
+    } else {
+      this.removeDevelopmentSeedUsers();
+    }
     this.db
       .prepare("UPDATE users SET username = lower(replace(coalesce(username, email, name), ' ', '.')) WHERE company_id = ? AND (username IS NULL OR username = '')")
       .run(COMPANY_ID);
+  }
+
+  private removeDevelopmentSeedUsers(): void {
+    DEV_USER_IDS.forEach((id) => {
+      this.db.prepare("DELETE FROM user_permission_overrides WHERE user_id = ?").run(id);
+      this.db.prepare("UPDATE sessions SET active = 0, locked = 0, logout_at = COALESCE(logout_at, ?) WHERE company_id = ? AND (user_id = ? OR operator_id = ?)").run(now(), COMPANY_ID, id, id);
+      this.db.prepare("DELETE FROM users WHERE company_id = ? AND id = ?").run(COMPANY_ID, id);
+    });
+    const lastOperator = this.getSecuritySetting("last_operator_login");
+    if (lastOperator && ["dono", "admin", "gerente", "operador"].includes(normalizeLogin(lastOperator))) {
+      this.setSecuritySetting("last_operator_login", "");
+    }
   }
 
   private seedInitialData(): void {
@@ -3076,15 +3195,20 @@ export class LocalDatabase {
       timestamp,
       timestamp
     );
-    this.db.prepare("INSERT INTO users (id, company_id, name, email, role, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)").run(
-      OPERATOR_ID,
-      COMPANY_ID,
-      OPERATOR_NAME,
-      "operador@nexpdv.com.br",
-      "cashier",
-      timestamp,
-      timestamp
-    );
+    if (desktopDevUsersEnabled()) {
+      this.db.prepare("INSERT INTO users (id, company_id, name, username, email, role, role_id, source, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)").run(
+        OPERATOR_ID,
+        COMPANY_ID,
+        OPERATOR_NAME,
+        "operador",
+        "operador@nexpdv.com.br",
+        "cashier",
+        "role_cashier",
+        "development_seed",
+        timestamp,
+        timestamp
+      );
+    }
 
     const categories = [
       ["cat_bebidas", "Bebidas", "#2563EB"],

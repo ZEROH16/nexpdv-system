@@ -44,6 +44,18 @@ contextBridge.exposeInMainWorld("nexpdv", {
       return () => ipcRenderer.removeListener("sync:status", listener);
     }
   },
+  updates: {
+    status: () => invoke("updates:status"),
+    check: () => invoke("updates:check"),
+    download: () => invoke("updates:download"),
+    install: () => invoke("updates:install"),
+    remindLater: () => invoke("updates:remind-later"),
+    onStatus: (callback: (state: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
+      ipcRenderer.on("updates:status", listener);
+      return () => ipcRenderer.removeListener("updates:status", listener);
+    }
+  },
   license: {
     check: () => invoke("license:check")
   },
@@ -69,6 +81,7 @@ contextBridge.exposeInMainWorld("nexpdv", {
   system: {
     state: () => invoke("system:state"),
     activate: (input: unknown) => invoke("system:activate", input),
+    createOwnerAccess: (input: unknown) => invoke("system:create-owner-access", input),
     settings: (input: unknown) => invoke("system:settings", input),
     cloud: (input: unknown) => invoke("system:cloud", input),
     company: (input: unknown) => invoke("system:company", input),

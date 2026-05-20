@@ -6,11 +6,12 @@ import { desktopApi, type AuthState } from "@/services/desktopApi";
 interface LoginProps {
   authState?: AuthState;
   locked?: boolean;
+  devUsersEnabled?: boolean;
   onAuthenticated: () => void;
 }
 
-export const Login = ({ authState, locked = false, onAuthenticated }: LoginProps) => {
-  const [login, setLogin] = useState(authState?.lastOperatorLogin ?? authState?.user?.username ?? "operador");
+export const Login = ({ authState, locked = false, devUsersEnabled = false, onAuthenticated }: LoginProps) => {
+  const [login, setLogin] = useState(authState?.lastOperatorLogin ?? authState?.user?.username ?? "");
   const [pin, setPin] = useState("");
   const [password, setPassword] = useState("");
   const [mode, setMode] = useState<"pin" | "password">("pin");
@@ -19,7 +20,7 @@ export const Login = ({ authState, locked = false, onAuthenticated }: LoginProps
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    setLogin(authState?.lastOperatorLogin ?? authState?.user?.username ?? "operador");
+    setLogin(authState?.lastOperatorLogin ?? authState?.user?.username ?? "");
     setRememberOperator(authState?.settings.rememberLastOperator ?? true);
   }, [authState]);
 
@@ -124,7 +125,7 @@ export const Login = ({ authState, locked = false, onAuthenticated }: LoginProps
           {locked ? "Desbloquear PDV" : "Entrar"}
         </Button>
 
-        {!locked ? (
+        {!locked && devUsersEnabled ? (
           <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">
             Desenvolvimento: operador PIN 0000, gerente PIN 1234, admin PIN 9999. Senha gerente/admin: 123456.
           </div>

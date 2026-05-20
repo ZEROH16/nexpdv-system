@@ -56,13 +56,13 @@ export const Pos = () => {
   const [pixQrError, setPixQrError] = useState<string>();
   const [managerDiscountOpen, setManagerDiscountOpen] = useState(false);
   const [managerCredential, setManagerCredential] = useState("");
-  const [managerLogin, setManagerLogin] = useState("gerente");
+  const [managerLogin, setManagerLogin] = useState("");
   const [managerCredentialMode, setManagerCredentialMode] = useState<"pin" | "password">("pin");
   const [pendingDiscountPercent, setPendingDiscountPercent] = useState(0);
   const [operatorSwitchOpen, setOperatorSwitchOpen] = useState(false);
   const [operatorSwitchForm, setOperatorSwitchForm] = useState({ login: "", pin: "", password: "", mode: "pin" as "pin" | "password" });
   const [creditAuthOpen, setCreditAuthOpen] = useState(false);
-  const [creditAuthForm, setCreditAuthForm] = useState({ login: "gerente", credential: "", mode: "pin" as "pin" | "password" });
+  const [creditAuthForm, setCreditAuthForm] = useState({ login: "", credential: "", mode: "pin" as "pin" | "password" });
   const [creditAuthError, setCreditAuthError] = useState<string>();
   const [discountError, setDiscountError] = useState<string>();
   const [highDiscountAuthorized, setHighDiscountAuthorized] = useState(false);

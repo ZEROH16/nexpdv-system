@@ -17,7 +17,7 @@ const appDataDevCandidates = [
 ].filter(Boolean);
 
 const targets = [
-  { label: "storage Electron dev, Local Storage, Cache e banco local", path: path.join(root, ".nexpdv-user-data") },
+  { label: "storage Electron dev, licenca, usuarios, sessoes, onboarding, cache e banco local", path: path.join(root, ".nexpdv-user-data") },
   { label: "banco SQLite/sql.js local solto", path: path.join(root, "nexpdv-local.db") },
   { label: "journal SQLite local solto", path: path.join(root, "nexpdv-local.db-journal") },
   { label: "marcador de reset local pendente", path: path.join(root, ".nexpdv-reset-local-request") },
@@ -51,8 +51,30 @@ const describeTargets = () =>
     return { ...target, path: resolved, exists: fs.existsSync(resolved) };
   });
 
+const removeTarget = (targetPath) => {
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
+    return [];
+  } catch (error) {
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
+      return [{ path: targetPath, error: error instanceof Error ? error.message : String(error) }];
+    }
+    const failures = [];
+    for (const entry of fs.readdirSync(targetPath, { withFileTypes: true })) {
+      const childPath = path.join(targetPath, entry.name);
+      try {
+        fs.rmSync(childPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
+      } catch (childError) {
+        failures.push({ path: childPath, error: childError instanceof Error ? childError.message : String(childError) });
+      }
+    }
+    return failures;
+  }
+};
+
 const askConfirmation = async () => {
   console.log("[desktop:reset-local] Este comando remove somente dados locais de desenvolvimento/teste do Desktop NexPDV.");
+  console.log("[desktop:reset-local] Inclui licenca local, empresa local, dono/admin criado, sessoes, tokens, usuarios dev e flags de primeiro acesso.");
   console.log("[desktop:reset-local] API SaaS, painel admin e banco cloud/API nao serao alterados.");
   console.log(`[desktop:reset-local] Digite ${confirmation} para continuar.`);
   const rl = readline.createInterface({ input, output });
@@ -76,8 +98,9 @@ const reset = () => {
       continue;
     }
     try {
-      fs.rmSync(target.path, { recursive: true, force: true });
-      removed.push(target);
+      const failures = removeTarget(target.path);
+      if (failures.length) failed.push(...failures.map((failure) => ({ ...target, path: failure.path, error: failure.error })));
+      else removed.push(target);
     } catch (error) {
       failed.push({ ...target, error: error instanceof Error ? error.message : String(error) });
     }

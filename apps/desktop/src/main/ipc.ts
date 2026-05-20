@@ -67,6 +67,7 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("auth:reset-role-defaults", (_event, roleId: string) => db.resetRoleDefaults(roleId));
   ipcMain.handle("system:state", () => db.getSystemState());
   ipcMain.handle("system:activate", (_event, input) => db.activateSystem(input));
+  ipcMain.handle("system:create-owner-access", (_event, input) => db.createOwnerAccess(input));
   ipcMain.handle("system:settings", (_event, input) => db.updateSettings(input));
   ipcMain.handle("system:cloud", (_event, input) => db.activateCloud(input));
   ipcMain.handle("system:company", (_event, input) => db.updateCompany(input));

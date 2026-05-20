@@ -5,6 +5,7 @@ import { LocalDatabase } from "./localDatabase";
 import { registerIpcHandlers } from "./ipc";
 import { SyncEngine } from "./syncEngine";
 import { resetLocalDataIfRequested } from "./devResetLocal";
+import { registerAutoUpdate } from "./autoUpdateService";
 
 const bootstrapLogPath = path.join(process.cwd(), "electron-main.log");
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -110,6 +111,12 @@ const createWindow = async (): Promise<void> => {
     splashWindow?.close();
     mainWindow?.show();
     logMain("Janela principal exibida.");
+  });
+
+  registerAutoUpdate({
+    window: mainWindow,
+    log: logMain,
+    audit: (action, details) => db.recordAuditEvent({ action, actor: "Sistema", details })
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {

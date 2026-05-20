@@ -23,7 +23,7 @@ const appDataDevCandidates = () =>
   ].filter((item): item is string => Boolean(item));
 
 const resetTargets = (root: string, userDataPath: string) => [
-  { label: "storage Electron dev, Local Storage, Cache e banco local", path: userDataPath },
+  { label: "storage Electron dev, licenca, usuarios, sessoes, onboarding, cache e banco local", path: userDataPath },
   { label: "banco SQLite/sql.js local solto", path: path.join(root, "nexpdv-local.db") },
   { label: "journal SQLite local solto", path: path.join(root, "nexpdv-local.db-journal") },
   { label: "cache temporario de validacao do main", path: path.join(root, ".tmp-main-check") },
@@ -43,6 +43,27 @@ const assertSafeTarget = (root: string, targetPath: string): string => {
     throw new Error(`Recusando remover raiz perigosa: ${resolved}`);
   }
   return resolved;
+};
+
+const removeTarget = (targetPath: string): Array<{ path: string; error: string }> => {
+  try {
+    fs.rmSync(targetPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
+    return [];
+  } catch (error) {
+    if (!fs.existsSync(targetPath) || !fs.statSync(targetPath).isDirectory()) {
+      return [{ path: targetPath, error: error instanceof Error ? error.message : String(error) }];
+    }
+    const failures: Array<{ path: string; error: string }> = [];
+    for (const entry of fs.readdirSync(targetPath, { withFileTypes: true })) {
+      const childPath = path.join(targetPath, entry.name);
+      try {
+        fs.rmSync(childPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 150 });
+      } catch (childError) {
+        failures.push({ path: childPath, error: childError instanceof Error ? childError.message : String(childError) });
+      }
+    }
+    return failures;
+  }
 };
 
 export const resetMarkerPath = (root = process.cwd()): string => path.join(root, resetMarkerName);
@@ -65,11 +86,11 @@ export const resetLocalDataIfRequested = (log: (message: string) => void, root =
       result.missing.push({ label: target.label, path: safePath });
       continue;
     }
-    try {
-      fs.rmSync(safePath, { recursive: true, force: true });
+    const failures = removeTarget(safePath);
+    if (failures.length) {
+      failures.forEach((failure) => result.failed.push({ label: target.label, path: failure.path, error: failure.error }));
+    } else {
       result.removed.push({ label: target.label, path: safePath });
-    } catch (error) {
-      result.failed.push({ label: target.label, path: safePath, error: error instanceof Error ? error.message : String(error) });
     }
   }
   try {

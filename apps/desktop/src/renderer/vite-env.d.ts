@@ -40,6 +40,14 @@ declare global {
         flush: <T>() => Promise<T>;
         onStatus: (callback: (state: unknown) => void) => () => void;
       };
+      updates: {
+        status: <T>() => Promise<T>;
+        check: <T>() => Promise<T>;
+        download: <T>() => Promise<T>;
+        install: <T>() => Promise<T>;
+        remindLater: <T>() => Promise<T>;
+        onStatus: (callback: (state: unknown) => void) => () => void;
+      };
       license: { check: <T>() => Promise<T> };
       auth: {
         state: <T>() => Promise<T>;
@@ -63,6 +71,7 @@ declare global {
       system: {
         state: <T>() => Promise<T>;
         activate: <T>(input: unknown) => Promise<T>;
+        createOwnerAccess: <T>(input: unknown) => Promise<T>;
         settings: <T>(input: unknown) => Promise<T>;
         cloud: <T>(input: unknown) => Promise<T>;
         company: <T>(input: unknown) => Promise<T>;

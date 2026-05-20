@@ -38,9 +38,6 @@ export const Activation = ({ onActivated }: { onActivated: () => void }) => {
           <Button variant="secondary" onClick={() => setHelpOpen(true)}><HelpCircle size={16} />Preciso de ajuda</Button>
           {message ? <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950 dark:text-red-200">{message}</div> : null}
         </div>
-        <div className="mt-6 rounded-lg bg-slate-50 p-4 text-xs text-slate-500 dark:bg-slate-950">
-          Chaves locais: OFFLINE NEXPDV-OFFLINE-2026, CLOUD NEXPDV-CLOUD-2026, PRO NEXPDV-PRO-2026.
-        </div>
       </section>
 
       {helpOpen ? (

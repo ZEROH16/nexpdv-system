@@ -28,6 +28,15 @@ const licenseKey = (planCode: string) => `NEXPDV-${planCode}-${randomBytes(3).to
 const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 const strongDeleteCompany = "EXCLUIR";
 const strongDeleteLicense = "EXCLUIR";
+const compareVersions = (left: string, right: string): number => {
+  const a = left.split(".").map((item) => Number(item.replace(/\D/g, "")) || 0);
+  const b = right.split(".").map((item) => Number(item.replace(/\D/g, "")) || 0);
+  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+    const diff = (a[index] ?? 0) - (b[index] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+};
 
 const userFromRequest = (request: FastifyRequest) => request.user as { sub?: string; role?: string; platformRole?: string; tenantId?: string };
 const isSuperAdmin = (request: FastifyRequest) => userFromRequest(request).platformRole === "super_admin";
@@ -136,6 +145,33 @@ const activationInput = z.object({
 });
 
 export const saasRoutes = async (app: FastifyInstance) => {
+  app.get("/updates/latest", async (request) => {
+    const query = z
+      .object({
+        version: z.string().optional(),
+        channel: z.enum(["stable", "beta", "dev"]).optional(),
+        platform: z.string().optional()
+      })
+      .parse(request.query);
+    const channel = query.channel ?? config.UPDATE_CHANNEL;
+    const latestVersion = config.UPDATE_VERSION;
+    const currentVersion = query.version ?? "0.0.0";
+    const hasDownload = Boolean(config.UPDATE_DOWNLOAD_URL);
+    const newer = compareVersions(latestVersion, currentVersion) > 0;
+    return {
+      product: "NexPDV Desktop",
+      channel,
+      platform: query.platform ?? "win32",
+      currentVersion,
+      latestVersion,
+      available: hasDownload && newer,
+      mandatory: config.UPDATE_MANDATORY,
+      changelog: config.UPDATE_CHANGELOG,
+      downloadUrl: config.UPDATE_DOWNLOAD_URL || null,
+      publishedAt: new Date().toISOString()
+    };
+  });
+
   app.post("/activation/activate", async (request, reply) => {
     const input = activationInput.parse(request.body);
     const key = input.licenseKey.trim().toUpperCase();

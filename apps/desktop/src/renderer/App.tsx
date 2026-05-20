@@ -1,5 +1,6 @@
 import { Layout } from "@/components/Layout";
 import { Skeleton } from "@/components/Skeleton";
+import { UpdateModal } from "@/components/UpdateModal";
 import { useAsync } from "@/hooks/useAsync";
 import { usePdvStore } from "@/store/usePdvStore";
 import { desktopApi } from "@/services/desktopApi";
@@ -14,6 +15,7 @@ import { Reports } from "@/pages/Reports";
 import { SalesHistory } from "@/pages/SalesHistory";
 import { Settings } from "@/pages/Settings";
 import { Login } from "@/pages/Login";
+import { OwnerOnboarding } from "@/pages/OwnerOnboarding";
 import { useEffect } from "react";
 
 const pages: Record<string, JSX.Element> = {
@@ -65,17 +67,28 @@ export const App = () => {
     );
   }
 
+  const withUpdates = (content: JSX.Element) => (
+    <>
+      {content}
+      <UpdateModal />
+    </>
+  );
+
   if (!systemState?.activated) {
-    return <Activation onActivated={refresh} />;
+    return withUpdates(<Activation onActivated={refresh} />);
+  }
+
+  if (systemState.ownerOnboardingRequired) {
+    return withUpdates(<OwnerOnboarding systemState={systemState} onCompleted={() => void Promise.all([refresh(), refreshAuth()])} />);
   }
 
   if (authState?.settings.requireLoginOnStart && !authState.session) {
-    return <Login authState={authState} onAuthenticated={refreshAuth} />;
+    return withUpdates(<Login authState={authState} devUsersEnabled={systemState.devUsersEnabled} onAuthenticated={refreshAuth} />);
   }
 
   if (authState?.session?.locked) {
-    return <Login authState={authState} locked onAuthenticated={refreshAuth} />;
+    return withUpdates(<Login authState={authState} locked devUsersEnabled={systemState.devUsersEnabled} onAuthenticated={refreshAuth} />);
   }
 
-  return <Layout authState={authState} onAuthChanged={refreshAuth}>{pages[page] ?? <Dashboard />}</Layout>;
+  return withUpdates(<Layout authState={authState} onAuthChanged={refreshAuth}>{pages[page] ?? <Dashboard />}</Layout>);
 };

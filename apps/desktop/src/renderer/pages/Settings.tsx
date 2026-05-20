@@ -1,11 +1,11 @@
-import { DatabaseBackup, HelpCircle, KeyRound, Moon, RefreshCcw, ShieldCheck, Smartphone, WalletCards } from "lucide-react";
+import { DatabaseBackup, DownloadCloud, HelpCircle, KeyRound, Moon, RefreshCcw, ShieldCheck, Smartphone, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Company, FiscalConfig, PixConfig } from "@nexpdv/shared";
 import { Button } from "@/components/Button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useAsync } from "@/hooks/useAsync";
 import { desktopApi } from "@/services/desktopApi";
-import type { SecuritySettings } from "@/services/desktopApi";
+import type { SecuritySettings, UpdateState } from "@/services/desktopApi";
 
 type SettingsTab = "company" | "license" | "backup" | "pix" | "fiscal" | "security" | "support";
 
@@ -98,6 +98,7 @@ export const Settings = () => {
   const [syncMessage, setSyncMessage] = useState<string>();
   const [message, setMessage] = useState<string>();
   const [pixTesting, setPixTesting] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>();
   const { data: license, refresh: refreshLicense } = useAsync(() => desktopApi.license.check(), []);
   const { data: systemState, refresh: refreshSystem } = useAsync(() => desktopApi.system.state(), []);
   const { data: backupState, refresh: refreshBackup } = useAsync(() => desktopApi.system.backupState(), []);
@@ -156,6 +157,18 @@ export const Settings = () => {
   useEffect(() => {
     if (securitySettings) setSecurityForm(securitySettings);
   }, [securitySettings]);
+
+  useEffect(() => {
+    let mounted = true;
+    void desktopApi.updates.status().then((state) => {
+      if (mounted) setUpdateState(state);
+    });
+    const unsubscribe = desktopApi.updates.onStatus((state) => setUpdateState(state as UpdateState));
+    return () => {
+      mounted = false;
+      unsubscribe();
+    };
+  }, []);
 
   const cloudEnabled = Boolean(license?.features?.cloud ?? systemState?.cloudEnabled);
   const pixEnabled = Boolean(license?.features?.pix ?? license?.pixEnabled);
@@ -312,6 +325,16 @@ export const Settings = () => {
     refreshSecuritySettings();
   };
 
+  const checkUpdates = async () => {
+    try {
+      const state = await desktopApi.updates.check();
+      setUpdateState(state);
+      setMessage(state.message);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel verificar atualizacoes.");
+    }
+  };
+
   const resetLocalInstallation = async () => {
     const answer = window.prompt("Digite RESETAR para apagar a instalacao local de desenvolvimento e reiniciar o NexPDV.");
     if (answer !== "RESETAR") {
@@ -399,7 +422,6 @@ export const Settings = () => {
                 <input className="field" placeholder="Nome do estabelecimento" value={licenseForm.companyName} onChange={(event) => setLicenseForm({ ...licenseForm, companyName: event.target.value })} />
                 <Button disabled={!licenseForm.ownerEmail || !licenseForm.licenseKey || !licenseForm.companyName} onClick={activateLicense}>Salvar licenca</Button>
               </div>
-              <div className="mt-3 text-xs text-slate-500">Chaves locais: NEXPDV-OFFLINE-2026, NEXPDV-CLOUD-2026, NEXPDV-PRO-2026.</div>
             </div>
             {!cloudEnabled ? (
               <div className="mt-5 rounded-lg border border-slate-200 p-4 dark:border-slate-800">
@@ -648,6 +670,26 @@ export const Settings = () => {
                 <h2 className="text-lg font-black">Suporte NexPDV</h2>
                 <p className="mt-2 text-sm text-slate-500">WhatsApp: (00) 00000-0000</p>
                 <p className="text-sm text-slate-500">Email: suporte@nexpdv.com.br</p>
+              </div>
+            </div>
+          </div>
+          <div className="panel p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <DownloadCloud size={24} />
+                <div>
+                  <h2 className="text-lg font-black">Atualizacoes do aplicativo</h2>
+                  <p className="mt-2 text-sm text-slate-500">
+                    Canal {updateState?.channel ?? "stable"} - versao atual {updateState?.currentVersion ?? systemState?.appVersion ?? "0.1.0"}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-500">{updateState?.message ?? "Verificacao pronta."}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <StatusBadge tone={updateState?.enabled ? "green" : "slate"}>{updateState?.enabled ? "Ativo" : "Desabilitado"}</StatusBadge>
+                <Button variant="secondary" onClick={checkUpdates}>
+                  <RefreshCcw size={16} />Verificar
+                </Button>
               </div>
             </div>
           </div>
