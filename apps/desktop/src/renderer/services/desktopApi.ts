@@ -180,8 +180,6 @@ export interface ThermalPrinterInfo {
   name: string;
   displayName: string;
   description?: string;
-  status?: number;
-  isDefault: boolean;
 }
 
 export interface ReceiptPrintContext {

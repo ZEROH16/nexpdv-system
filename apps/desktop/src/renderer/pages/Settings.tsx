@@ -442,7 +442,7 @@ export const Settings = () => {
                     <option value="">Usar impressora padrao do Windows</option>
                     {(printers ?? []).map((printer) => (
                       <option key={printer.name} value={printer.name}>
-                        {printer.displayName || printer.name}{printer.isDefault ? " (padrao)" : ""}
+                        {printer.displayName || printer.name}
                       </option>
                     ))}
                   </select>
