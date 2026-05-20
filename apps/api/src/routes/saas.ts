@@ -139,23 +139,64 @@ export const saasRoutes = async (app: FastifyInstance) => {
   app.post("/activation/activate", async (request, reply) => {
     const input = activationInput.parse(request.body);
     const key = input.licenseKey.trim().toUpperCase();
+    const ownerEmail = input.ownerEmail.trim().toLowerCase();
     const license = await app.prisma.license.findUnique({
       where: { key },
       include: { company: { include: { tenant: true } }, plan: true, devices: true }
     });
     if (!license) {
       await audit(app, { action: "ativacao online falhou", details: `chave inexistente: ${key}`, request });
-      return reply.code(404).send({ message: "Licenca nao encontrada." });
+      return reply.code(404).send({
+        code: "LICENSE_NOT_FOUND",
+        message: "Chave de ativacao inexistente. Confira a chave gerada no Painel Admin."
+      });
     }
-    if (license.status !== "active") return reply.code(403).send({ message: "Licenca bloqueada ou inativa." });
-    if (license.company.status !== "active") return reply.code(403).send({ message: "Empresa bloqueada." });
-    if (license.validUntil.getTime() <= Date.now()) return reply.code(403).send({ message: "Licenca expirada." });
+    if (license.company.email && license.company.email.trim().toLowerCase() !== ownerEmail) {
+      await audit(app, { tenantId: license.company.tenantId, action: "ativacao online falhou", entity: "license", entityId: license.id, details: "email nao confere", request });
+      return reply.code(403).send({
+        code: "OWNER_EMAIL_MISMATCH",
+        message: "Email informado nao confere com o email cadastrado na empresa da licenca.",
+        details: "Use o email da empresa no Painel Admin ou atualize o cadastro antes de ativar."
+      });
+    }
+    if (license.status !== "active") {
+      await audit(app, { tenantId: license.company.tenantId, action: "ativacao online falhou", entity: "license", entityId: license.id, details: `status ${license.status}`, request });
+      return reply.code(403).send({
+        code: "LICENSE_STATUS_INVALID",
+        message: license.status === "blocked" ? "Licenca bloqueada." : "Licenca inativa ou cancelada.",
+        details: `Status atual: ${license.status}.`
+      });
+    }
+    if (license.company.status !== "active") {
+      await audit(app, { tenantId: license.company.tenantId, action: "ativacao online falhou", entity: "company", entityId: license.companyId, details: `empresa ${license.company.status}`, request });
+      return reply.code(403).send({
+        code: "COMPANY_BLOCKED",
+        message: "Empresa bloqueada ou inativa no Painel Admin.",
+        details: `Status atual: ${license.company.status}.`
+      });
+    }
+    if (license.validUntil.getTime() <= Date.now()) {
+      await audit(app, { tenantId: license.company.tenantId, action: "ativacao online falhou", entity: "license", entityId: license.id, details: "licenca expirada", request });
+      return reply.code(403).send({
+        code: "LICENSE_EXPIRED",
+        message: "Licenca expirada.",
+        details: `Validade: ${license.validUntil.toISOString()}.`
+      });
+    }
 
     const existingDevice = license.devices.find((device) => device.deviceId === input.device.deviceId);
     const activeDevices = license.devices.filter((device) => device.status === "active");
     if (!existingDevice && activeDevices.length >= license.maxDevices) {
       await audit(app, { tenantId: license.company.tenantId, action: "limite dispositivos excedido", entity: "license", entityId: license.id, request });
-      return reply.code(403).send({ message: "Limite de dispositivos atingido para esta licenca." });
+      return reply.code(403).send({
+        code: "DEVICE_LIMIT_REACHED",
+        message: "Limite de dispositivos atingido para esta licenca.",
+        details: "Remova ou resete uma ativacao no Painel Admin antes de ativar outro PDV.",
+        linkedEntities: {
+          devices: activeDevices.length,
+          maxDevices: license.maxDevices
+        }
+      });
     }
 
     const device = await app.prisma.device.upsert({
@@ -210,7 +251,7 @@ export const saasRoutes = async (app: FastifyInstance) => {
         id: updatedLicense.company.id,
         name: updatedLicense.company.tradeName ?? updatedLicense.company.name,
         document: updatedLicense.company.document,
-        ownerEmail: input.ownerEmail
+        ownerEmail: updatedLicense.company.email ?? ownerEmail
       },
       license: {
         id: updatedLicense.id,

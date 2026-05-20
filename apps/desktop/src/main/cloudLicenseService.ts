@@ -30,8 +30,11 @@ interface ActivationResponse {
   };
 }
 
+const DEFAULT_DEV_CLOUD_API_URL = "http://localhost:3333";
+
 const cloudBaseUrl = (): string | undefined => {
-  const value = (process.env.NEXPDV_CLOUD_API_URL || process.env.VITE_NEXPDV_CLOUD_API_URL || "").trim();
+  const fallbackDevUrl = !app.isPackaged || process.env.NODE_ENV === "development" || process.env.VITE_DEV_SERVER_URL ? DEFAULT_DEV_CLOUD_API_URL : "";
+  const value = (process.env.NEXPDV_CLOUD_API_URL || process.env.VITE_NEXPDV_CLOUD_API_URL || fallbackDevUrl).trim();
   return value ? value.replace(/\/$/, "") : undefined;
 };
 
@@ -45,6 +48,8 @@ export const getCloudDeviceInfo = () => {
   return {
     deviceId: `dev_${fingerprint.slice(0, 16)}`,
     name: os.hostname() || "NexPDV Desktop",
+    hostName: os.hostname(),
+    os: `${os.type()} ${os.release()}`,
     fingerprint,
     appVersion: app.getVersion(),
     platform: "desktop"
@@ -69,9 +74,10 @@ export const activateLicenseOnline = async (input: LicenseActivationInput, compa
       }),
       signal: controller.signal
     });
-    const body = (await response.json().catch(() => ({}))) as Partial<ActivationResponse> & { message?: string };
+    const body = (await response.json().catch(() => ({}))) as Partial<ActivationResponse> & { code?: string; message?: string; details?: string };
     if (!response.ok || !body.license) {
-      throw new Error(body.message || `Ativacao online falhou: HTTP ${response.status}`);
+      const details = body.details ? ` ${body.details}` : "";
+      throw new Error(body.message ? `${body.message}${details}` : `Ativacao online falhou: HTTP ${response.status}`);
     }
     return createOnlineLicenseActivation(
       input,
@@ -82,8 +88,15 @@ export const activateLicenseOnline = async (input: LicenseActivationInput, compa
       },
       companyId
     );
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("API Cloud indisponivel ou demorou para responder. Confira se o servidor SaaS local esta em http://localhost:3333.");
+    }
+    if (error instanceof TypeError) {
+      throw new Error("API Cloud indisponivel. Confira se o servidor SaaS local esta rodando em http://localhost:3333.");
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
 };
-

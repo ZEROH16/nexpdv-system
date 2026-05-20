@@ -32,7 +32,7 @@ import {
 } from "@nexpdv/shared";
 import { activateLicenseOnline } from "./cloudLicenseService";
 import { FiscalService } from "./fiscalService";
-import { assertLicensedModule, checkStoredLicense, createLocalLicenseActivation, normalizeStoredLicense, serializeFeatures, type LocalLicenseRecord } from "./licenseService";
+import { assertLicensedModule, checkStoredLicense, createLocalLicenseActivation, isLocalActivationKey, normalizeStoredLicense, serializeFeatures, type LocalLicenseRecord } from "./licenseService";
 import { adminRoleCodes, hashPassword, hashPin, legacyHashPassword, managerRoleCodes, normalizeLogin, PERMISSIONS, permissionLabels, type PermissionKey } from "./permissionService";
 import { PixService } from "./pixService";
 import { roleSeeds } from "./roleService";
@@ -1398,10 +1398,16 @@ export class LocalDatabase {
         license = onlineLicense;
         activationMode = "online";
       } else {
+        if (!isLocalActivationKey(input.licenseKey)) {
+          throw new Error("API Cloud nao configurada para ativar esta chave. Em desenvolvimento, use http://localhost:3333 ou defina NEXPDV_CLOUD_API_URL.");
+        }
         license = createLocalLicenseActivation(input, COMPANY_ID, timestamp);
       }
     } catch (error) {
       this.recordAudit("ativacao online indisponivel", input.ownerEmail.trim(), error instanceof Error ? error.message : "falha desconhecida");
+      if (!isLocalActivationKey(input.licenseKey)) {
+        throw error;
+      }
       license = createLocalLicenseActivation(input, COMPANY_ID, timestamp);
     }
     this.db

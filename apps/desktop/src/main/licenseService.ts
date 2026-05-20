@@ -80,6 +80,8 @@ const normalizeKey = (key: string): string => key.trim().toUpperCase();
 
 const validEmail = (email: string): boolean => /^\S+@\S+\.\S+$/.test(email.trim());
 
+export const isLocalActivationKey = (key: string): boolean => Boolean(activationKeys[normalizeKey(key)]);
+
 export const planForKey = (key: string): LicensePlan | undefined => activationKeys[normalizeKey(key)]?.plan;
 
 export const getPlanFeatures = (plan: LicensePlan): LicenseFeatures => ({ ...licensePlans[plan].features });
@@ -270,10 +272,11 @@ export const checkStoredLicense = (license: (License & { featuresJson?: string }
     };
   }
 
-  const knownKey = Boolean(activationKeys[normalizeKey(normalized.key)]);
+  const knownKey = isLocalActivationKey(normalized.key);
+  const onlineKey = normalized.validationMode === "online" || normalized.validationMode === "online_pending";
   const notExpired = new Date(normalized.validUntil).getTime() > Date.now();
   const sealValid = verifyLicenseSeal(normalized);
-  const valid = knownKey && normalized.status === "active" && notExpired && sealValid;
+  const valid = (knownKey || onlineKey) && normalized.status === "active" && notExpired && sealValid;
   const enabledFeatures = valid ? normalized.features : disabledFeatures();
 
   return {
