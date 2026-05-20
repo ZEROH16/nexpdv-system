@@ -9,7 +9,7 @@ const nav = [
   { id: "licenses", label: "Licencas", icon: KeyRound },
   { id: "devices", label: "Dispositivos", icon: MonitorSmartphone },
   { id: "users", label: "Usuarios SaaS", icon: Users },
-  { id: "sync", label: "Sincronizacao", icon: ListTree },
+  { id: "sync", label: "NEX CLOUD", icon: ListTree },
   { id: "audit", label: "Auditoria", icon: ShieldCheck },
   { id: "logs", label: "Logs", icon: FileClock }
 ];

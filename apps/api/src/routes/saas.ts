@@ -26,6 +26,25 @@ const parseFeatures = (value?: string | null): FeatureMap => {
 const featureString = (features: Partial<FeatureMap>) => JSON.stringify({ ...emptyFeatures(), ...features });
 const licenseKey = (planCode: string) => `NEXPDV-${planCode}-${randomBytes(3).toString("hex").toUpperCase()}`;
 const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+const strongDeleteCompany = "EXCLUIR DEFINITIVO";
+const strongDeleteLicense = "EXCLUIR LICENCA";
+
+const userFromRequest = (request: FastifyRequest) => request.user as { sub?: string; role?: string; platformRole?: string; tenantId?: string };
+const isSuperAdmin = (request: FastifyRequest) => userFromRequest(request).platformRole === "super_admin";
+const forbiddenIfNotSuperAdmin = (request: FastifyRequest, reply: any) => {
+  if (isSuperAdmin(request)) return false;
+  reply.code(403).send({ message: "Acao restrita ao super_admin." });
+  return true;
+};
+
+const backupLevel = (lastBackupAt?: Date | null) => {
+  if (!lastBackupAt) return { level: "gray", label: "nunca fez backup", days: null as number | null };
+  const days = Math.floor((Date.now() - lastBackupAt.getTime()) / 86_400_000);
+  if (days <= 1) return { level: "green", label: "backup em dia", days };
+  if (days <= 3) return { level: "amber", label: "backup atrasado", days };
+  if (days <= 7) return { level: "orange", label: "backup critico", days };
+  return { level: "red", label: "backup vencido", days };
+};
 
 const adminGuard = async (request: FastifyRequest, reply: any) => {
   const user = request.user as { sub?: string; role?: string; platformRole?: string };
@@ -55,6 +74,12 @@ const companyInput = z.object({
   zipCode: z.string().optional(),
   internalNotes: z.string().optional(),
   accountManager: z.string().optional(),
+  backupStartedAt: z.string().optional(),
+  lastBackupAt: z.string().optional(),
+  lastSyncAt: z.string().optional(),
+  backupStatus: z.string().optional(),
+  syncStatus: z.string().optional(),
+  cloudHealth: z.string().optional(),
   status: z.string().default("active")
 });
 
@@ -332,25 +357,62 @@ export const saasRoutes = async (app: FastifyInstance) => {
       return { ...company, metrics: { revenueSynced: revenue._sum.total ?? 0 }, logs };
     });
 
-    adminApp.post("/companies/:id/status", async (request) => {
+    const setCompanyStatus = async (request: FastifyRequest) => {
       const params = z.object({ id: z.string() }).parse(request.params);
       const body = z.object({ status: z.enum(["active", "inactive", "blocked"]) }).parse(request.body);
       const company = await app.prisma.company.update({ where: { id: params.id }, data: { status: body.status } });
       await audit(app, { tenantId: company.tenantId, userId: (request.user as any).sub, action: `empresa ${body.status}`, entity: "company", entityId: company.id, request });
       return company;
-    });
+    };
+
+    adminApp.post("/companies/:id/status", setCompanyStatus);
+    adminApp.patch("/companies/:id/status", setCompanyStatus);
 
     adminApp.delete("/companies/:id", async (request, reply) => {
       const params = z.object({ id: z.string() }).parse(request.params);
+      const body = z.object({ force: z.boolean().default(false), confirmation: z.string().optional() }).parse(request.body ?? {});
       const relations = await app.prisma.company.findUnique({
         where: { id: params.id },
-        include: { _count: { select: { licenses: true, devices: true, sales: true } } }
+        include: { _count: { select: { licenses: true, devices: true, sales: true, syncJobs: true, users: true, products: true, customers: true, cashRegisters: true, settings: true, subscriptions: true } } }
       });
       if (!relations) return reply.code(404).send({ message: "Empresa nao encontrada." });
-      if (relations._count.licenses || relations._count.devices || relations._count.sales) {
-        const company = await app.prisma.company.update({ where: { id: params.id }, data: { status: "inactive" } });
-        await audit(app, { tenantId: company.tenantId, userId: (request.user as any).sub, action: "empresa inativada por vinculos", entity: "company", entityId: company.id, request });
-        return { ...company, softDeleted: true };
+      const linked = Object.values(relations._count).some((count) => count > 0);
+      if (linked && !body.force) {
+        return reply.code(409).send({
+          message: "Empresa possui vinculos. Inative/bloqueie ou confirme exclusao definitiva como super_admin.",
+          linked: true,
+          counts: relations._count,
+          canForce: isSuperAdmin(request),
+          confirmation: strongDeleteCompany
+        });
+      }
+      if (linked && forbiddenIfNotSuperAdmin(request, reply)) return reply;
+      if (linked && body.confirmation !== strongDeleteCompany) {
+        return reply.code(400).send({ message: `Digite ${strongDeleteCompany} para excluir definitivamente.` });
+      }
+      if (linked) {
+        await app.prisma.$transaction([
+          app.prisma.payment.deleteMany({ where: { sale: { companyId: params.id } } }),
+          app.prisma.saleItem.deleteMany({ where: { sale: { companyId: params.id } } }),
+          app.prisma.sale.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.cashMovement.deleteMany({ where: { cashRegister: { companyId: params.id } } }),
+          app.prisma.cashRegister.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.product.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.category.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.customer.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.setting.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.deviceToken.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.syncJob.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.syncLog.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.device.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.subscription.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.license.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.auditLog.updateMany({ where: { user: { companyId: params.id } }, data: { userId: null } }),
+          app.prisma.user.deleteMany({ where: { companyId: params.id } }),
+          app.prisma.company.delete({ where: { id: params.id } })
+        ]);
+        await audit(app, { userId: (request.user as any).sub, action: "empresa excluida definitivamente", entity: "company", entityId: params.id, details: JSON.stringify(relations._count), request });
+        return { ok: true, hardDeleted: true };
       }
       await app.prisma.company.delete({ where: { id: params.id } });
       await audit(app, { userId: (request.user as any).sub, action: "empresa excluida", entity: "company", entityId: params.id, request });
@@ -411,12 +473,27 @@ export const saasRoutes = async (app: FastifyInstance) => {
       return plan;
     });
 
-    adminApp.post("/plans/:id/status", async (request) => {
+    const setPlanStatus = async (request: FastifyRequest) => {
       const params = z.object({ id: z.string() }).parse(request.params);
       const body = z.object({ active: z.boolean() }).parse(request.body);
       const plan = await app.prisma.plan.update({ where: { id: params.id }, data: { active: body.active } });
       await audit(app, { userId: (request.user as any).sub, action: body.active ? "plano ativado" : "plano inativado", entity: "plan", entityId: plan.id, request });
       return plan;
+    };
+
+    adminApp.post("/plans/:id/status", setPlanStatus);
+    adminApp.patch("/plans/:id/status", setPlanStatus);
+
+    adminApp.delete("/plans/:id", async (request, reply) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const plan = await app.prisma.plan.findUnique({ where: { id: params.id }, include: { _count: { select: { licenses: true, subscriptions: true } } } });
+      if (!plan) return reply.code(404).send({ message: "Plano nao encontrado." });
+      if (plan._count.licenses || plan._count.subscriptions) {
+        return reply.code(409).send({ message: "Plano em uso. Inative o plano em vez de excluir.", counts: plan._count });
+      }
+      await app.prisma.plan.delete({ where: { id: params.id } });
+      await audit(app, { userId: (request.user as any).sub, action: "plano excluido", entity: "plan", entityId: params.id, details: plan.code, request });
+      return { ok: true };
     });
 
     adminApp.get("/licenses", async () =>
@@ -468,6 +545,42 @@ export const saasRoutes = async (app: FastifyInstance) => {
       });
       await audit(app, { userId: (request.user as any).sub, action: "licenca alterada", entity: "license", entityId: license.id, request });
       return license;
+    });
+
+    adminApp.patch("/licenses/:id/status", async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const body = z.object({ status: z.enum(["active", "blocked", "cancelled", "expired", "trial"]), reason: z.string().optional() }).parse(request.body);
+      const license = await app.prisma.license.update({
+        where: { id: params.id },
+        data: { status: body.status, blockedReason: body.status === "blocked" ? body.reason ?? "Bloqueio manual" : null },
+        include: { company: true, plan: true, devices: true }
+      });
+      await audit(app, { userId: (request.user as any).sub, action: `licenca ${body.status}`, entity: "license", entityId: license.id, details: body.reason, request });
+      return license;
+    });
+
+    adminApp.delete("/licenses/:id", async (request, reply) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const body = z.object({ force: z.boolean().default(false), confirmation: z.string().optional() }).parse(request.body ?? {});
+      const license = await app.prisma.license.findUnique({ where: { id: params.id }, include: { devices: true } });
+      if (!license) return reply.code(404).send({ message: "Licenca nao encontrada." });
+      if (license.devices.length && !body.force) {
+        return reply.code(409).send({
+          message: "Licenca possui dispositivos vinculados. Cancele/bloqueie ou confirme exclusao definitiva como super_admin.",
+          linked: true,
+          counts: { devices: license.devices.length },
+          canForce: isSuperAdmin(request),
+          confirmation: strongDeleteLicense
+        });
+      }
+      if (license.devices.length && forbiddenIfNotSuperAdmin(request, reply)) return reply;
+      if (license.devices.length && body.confirmation !== strongDeleteLicense) {
+        return reply.code(400).send({ message: `Digite ${strongDeleteLicense} para excluir definitivamente.` });
+      }
+      if (license.devices.length) await app.prisma.device.updateMany({ where: { licenseId: params.id }, data: { licenseId: null, status: "inactive", online: false, deactivatedAt: new Date() } });
+      await app.prisma.license.delete({ where: { id: params.id } });
+      await audit(app, { userId: (request.user as any).sub, action: "licenca excluida", entity: "license", entityId: params.id, details: license.key, request });
+      return { ok: true, detachedDevices: license.devices.length };
     });
 
     adminApp.post("/licenses/:id/block", async (request) => {
@@ -551,6 +664,17 @@ export const saasRoutes = async (app: FastifyInstance) => {
       return device;
     });
 
+    adminApp.patch("/devices/:id/status", async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const body = z.object({ status: z.enum(["active", "inactive", "blocked"]) }).parse(request.body);
+      const device = await app.prisma.device.update({
+        where: { id: params.id },
+        data: { status: body.status, online: body.status === "active" ? undefined : false, deactivatedAt: body.status === "active" ? null : new Date() }
+      });
+      await audit(app, { userId: (request.user as any).sub, action: `dispositivo ${body.status}`, entity: "device", entityId: device.id, request });
+      return device;
+    });
+
     adminApp.post("/devices/:id/block", async (request) => {
       const params = z.object({ id: z.string() }).parse(request.params);
       const device = await app.prisma.device.update({ where: { id: params.id }, data: { status: "blocked", online: false } });
@@ -568,6 +692,93 @@ export const saasRoutes = async (app: FastifyInstance) => {
     adminApp.get("/sync/jobs", async () =>
     app.prisma.syncJob.findMany({ include: { company: true, device: true }, orderBy: { createdAt: "desc" }, take: 250 })
   );
+
+    adminApp.get("/cloud/health", async () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const companies = await app.prisma.company.findMany({
+        include: {
+          licenses: { include: { plan: true, devices: true }, orderBy: { updatedAt: "desc" } },
+          devices: true,
+          syncJobs: { orderBy: { updatedAt: "desc" }, take: 5 }
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 250
+      });
+      const rows = companies.map((company) => {
+        const activeLicense = company.licenses.find((license) => license.status === "active") ?? company.licenses[0];
+        const lastDeviceSeenAt = company.devices.reduce<Date | null>((latest, device) => {
+          if (!device.lastSeenAt) return latest;
+          return !latest || device.lastSeenAt > latest ? device.lastSeenAt : latest;
+        }, null);
+        const lastJob = company.syncJobs[0];
+        const lastSyncAt = company.lastSyncAt ?? lastJob?.processedAt ?? lastJob?.updatedAt ?? lastDeviceSeenAt;
+        const lastBackupAt = company.lastBackupAt;
+        const backup = backupLevel(lastBackupAt);
+        const onlineDevices = company.devices.filter((device) => device.online && device.status === "active").length;
+        const failedJobs = company.syncJobs.filter((job) => job.status === "failed" || job.conflict).length;
+        const cloudStatus = company.cloudHealth !== "unknown" ? company.cloudHealth : failedJobs ? "erro" : onlineDevices ? "online" : "sem_conexao";
+        return {
+          id: company.id,
+          name: company.tradeName ?? company.name,
+          document: company.document,
+          status: company.status,
+          plan: activeLicense?.plan?.name ?? activeLicense?.planCode ?? "-",
+          licenseStatus: activeLicense?.status ?? "sem licenca",
+          licenseValidUntil: activeLicense?.validUntil,
+          devicesOnline: onlineDevices,
+          devicesTotal: company.devices.length,
+          lastBackupAt,
+          backupStartedAt: company.backupStartedAt,
+          backupStatus: company.backupStatus,
+          lastSyncAt,
+          syncStatus: company.syncStatus !== "unknown" ? company.syncStatus : lastJob?.status ?? "sem sync",
+          backupAgeDays: backup.days,
+          backupLevel: backup.level,
+          backupLabel: backup.label,
+          cloudStatus,
+          cloudNotifiedAt: company.cloudNotifiedAt,
+          recentErrors: failedJobs
+        };
+      });
+      const metrics = {
+        activeCompanies: companies.filter((company) => company.status === "active").length,
+        onlineCompanies: rows.filter((row) => row.devicesOnline > 0).length,
+        companiesWithoutConnection: rows.filter((row) => row.devicesOnline === 0).length,
+        backupsToday: rows.filter((row) => row.lastBackupAt && new Date(row.lastBackupAt).getTime() >= today.getTime()).length,
+        backupsLate: rows.filter((row) => ["amber", "orange", "red", "gray"].includes(row.backupLevel)).length,
+        activeLicenses: companies.flatMap((company) => company.licenses).filter((license) => license.status === "active").length,
+        inactiveLicenses: companies.flatMap((company) => company.licenses).filter((license) => license.status !== "active").length,
+        syncPending: await app.prisma.syncJob.count({ where: { status: { in: ["pending", "failed"] } } }),
+        recentErrors: await app.prisma.syncJob.count({ where: { status: "failed" } })
+      };
+      return { metrics, companies: rows };
+    });
+
+    adminApp.get("/cloud/backups", async () => {
+      const companies = await app.prisma.company.findMany({ include: { devices: true }, orderBy: { updatedAt: "desc" }, take: 250 });
+      return companies.map((company) => {
+        const backup = backupLevel(company.lastBackupAt);
+        return {
+          id: company.id,
+          name: company.tradeName ?? company.name,
+          lastBackupAt: company.lastBackupAt,
+          backupStartedAt: company.backupStartedAt,
+          backupStatus: company.backupStatus,
+          backupAgeDays: backup.days,
+          backupLevel: backup.level,
+          backupLabel: backup.label,
+          devicesOnline: company.devices.filter((device) => device.online && device.status === "active").length
+        };
+      });
+    });
+
+    adminApp.patch("/cloud/company/:id/notified", async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const company = await app.prisma.company.update({ where: { id: params.id }, data: { cloudNotifiedAt: new Date() } });
+      await audit(app, { tenantId: company.tenantId, userId: (request.user as any).sub, action: "cliente cloud avisado", entity: "company", entityId: company.id, request });
+      return { ok: true, cloudNotifiedAt: company.cloudNotifiedAt };
+    });
 
     adminApp.get("/audit", async () => app.prisma.auditLog.findMany({ include: { user: true }, orderBy: { createdAt: "desc" }, take: 250 }));
 
@@ -624,15 +835,26 @@ export const saasRoutes = async (app: FastifyInstance) => {
           email: input.email,
           phone: input.phone,
           platformRole: input.platformRole,
+          role: input.platformRole === "super_admin" || input.platformRole === "admin" ? "admin" : input.platformRole ? "manager" : undefined,
           permissionsJson: input.permissions ? JSON.stringify(input.permissions) : undefined,
           active: input.active,
-          passwordHash: input.password ? await bcrypt.hash(input.password, 10) : undefined
+          passwordHash: input.password ? await bcrypt.hash(input.password, 10) : undefined,
+          refreshTokenHash: input.password || input.active === false ? null : undefined
         },
-        select: { id: true, name: true, email: true, platformRole: true, active: true, twoFactorEnabled: true }
+        select: { id: true, name: true, email: true, platformRole: true, active: true, twoFactorEnabled: true, permissionsJson: true }
       });
       await audit(app, { userId: (request.user as any).sub, action: "usuario saas alterado", entity: "user", entityId: user.id, request });
       return user;
     });
+
+    adminApp.patch("/admin/users/:id/permissions", async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const body = z.object({ permissions: z.record(z.boolean()) }).parse(request.body);
+      const user = await app.prisma.user.update({ where: { id: params.id }, data: { permissionsJson: JSON.stringify(body.permissions), refreshTokenHash: null } });
+      await audit(app, { userId: (request.user as any).sub, action: "permissoes usuario saas alteradas", entity: "user", entityId: user.id, request });
+      return { ok: true };
+    });
+
     adminApp.post("/admin/users/:id/reset-password", async (request) => {
       const params = z.object({ id: z.string() }).parse(request.params);
       const body = z.object({ password: z.string().min(6) }).parse(request.body);
@@ -642,8 +864,79 @@ export const saasRoutes = async (app: FastifyInstance) => {
     });
     adminApp.post("/admin/users/:id/disable-2fa", async (request) => {
       const params = z.object({ id: z.string() }).parse(request.params);
-      await app.prisma.user.update({ where: { id: params.id }, data: { twoFactorEnabled: false, twoFactorSecret: null, recoveryCodesHash: null } });
+      await app.prisma.user.update({ where: { id: params.id }, data: { twoFactorEnabled: false, twoFactorSecret: null, recoveryCodesHash: null, refreshTokenHash: null } });
       await audit(app, { userId: (request.user as any).sub, action: "2fa de usuario desativado", entity: "user", entityId: params.id, request });
+      return { ok: true };
+    });
+
+    adminApp.delete("/admin/users/:id", async (request, reply) => {
+      if (forbiddenIfNotSuperAdmin(request, reply)) return reply;
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const current = userFromRequest(request);
+      const target = await app.prisma.user.findUnique({ where: { id: params.id }, include: { _count: { select: { sales: true, auditLogs: true } } } });
+      if (!target) return reply.code(404).send({ message: "Usuario SaaS nao encontrado." });
+      if (target.id === current.sub && target.platformRole === "super_admin") {
+        const activeSuperAdmins = await app.prisma.user.count({ where: { platformRole: "super_admin", active: true } });
+        if (activeSuperAdmins <= 1) return reply.code(409).send({ message: "Nao e possivel excluir o unico super_admin ativo logado." });
+      }
+      if (target._count.sales) {
+        return reply.code(409).send({ message: "Usuario possui vendas vinculadas. Inative em vez de excluir.", counts: target._count });
+      }
+      await app.prisma.$transaction([
+        app.prisma.deviceToken.deleteMany({ where: { userId: target.id } }),
+        app.prisma.auditLog.updateMany({ where: { userId: target.id }, data: { userId: null } }),
+        app.prisma.user.delete({ where: { id: target.id } })
+      ]);
+      await audit(app, { userId: current.sub === target.id ? null : current.sub, action: "usuario saas excluido", entity: "user", entityId: target.id, details: target.email, request });
+      return { ok: true };
+    });
+
+    adminApp.patch("/users/:id", async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const input = userInput.partial().parse(request.body);
+      const user = await app.prisma.user.update({
+        where: { id: params.id },
+        data: {
+          name: input.name,
+          email: input.email,
+          phone: input.phone,
+          platformRole: input.platformRole,
+          role: input.platformRole === "super_admin" || input.platformRole === "admin" ? "admin" : input.platformRole ? "manager" : undefined,
+          permissionsJson: input.permissions ? JSON.stringify(input.permissions) : undefined,
+          active: input.active,
+          passwordHash: input.password ? await bcrypt.hash(input.password, 10) : undefined,
+          refreshTokenHash: input.password || input.active === false ? null : undefined
+        }
+      });
+      await audit(app, { userId: (request.user as any).sub, action: "usuario saas alterado", entity: "user", entityId: user.id, request });
+      return user;
+    });
+
+    adminApp.patch("/users/:id/permissions", async (request) => {
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const body = z.object({ permissions: z.record(z.boolean()) }).parse(request.body);
+      const user = await app.prisma.user.update({ where: { id: params.id }, data: { permissionsJson: JSON.stringify(body.permissions), refreshTokenHash: null } });
+      await audit(app, { userId: (request.user as any).sub, action: "permissoes usuario saas alteradas", entity: "user", entityId: user.id, request });
+      return { ok: true };
+    });
+
+    adminApp.delete("/users/:id", async (request, reply) => {
+      if (forbiddenIfNotSuperAdmin(request, reply)) return reply;
+      const params = z.object({ id: z.string() }).parse(request.params);
+      const current = userFromRequest(request);
+      const target = await app.prisma.user.findUnique({ where: { id: params.id }, include: { _count: { select: { sales: true, auditLogs: true } } } });
+      if (!target) return reply.code(404).send({ message: "Usuario SaaS nao encontrado." });
+      if (target.id === current.sub && target.platformRole === "super_admin") {
+        const activeSuperAdmins = await app.prisma.user.count({ where: { platformRole: "super_admin", active: true } });
+        if (activeSuperAdmins <= 1) return reply.code(409).send({ message: "Nao e possivel excluir o unico super_admin ativo logado." });
+      }
+      if (target._count.sales) return reply.code(409).send({ message: "Usuario possui vendas vinculadas. Inative em vez de excluir.", counts: target._count });
+      await app.prisma.$transaction([
+        app.prisma.deviceToken.deleteMany({ where: { userId: target.id } }),
+        app.prisma.auditLog.updateMany({ where: { userId: target.id }, data: { userId: null } }),
+        app.prisma.user.delete({ where: { id: target.id } })
+      ]);
+      await audit(app, { userId: current.sub === target.id ? null : current.sub, action: "usuario saas excluido", entity: "user", entityId: target.id, details: target.email, request });
       return { ok: true };
     });
     adminApp.get("/admin/logs", async () => app.prisma.syncLog.findMany({ orderBy: { createdAt: "desc" }, take: 200 }));

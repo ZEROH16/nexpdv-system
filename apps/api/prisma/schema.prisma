@@ -25,7 +25,7 @@ model Tenant {
 }
 
 model Company {
-  id                String   @id @default(cuid())
+  id                String    @id @default(cuid())
   tenantId          String?
   name              String
   document          String
@@ -41,9 +41,16 @@ model Company {
   logoUrl           String?
   internalNotes     String?
   accountManager    String?
-  status            String   @default("active")
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  status            String    @default("active")
+  backupStartedAt   DateTime?
+  lastBackupAt      DateTime?
+  lastSyncAt        DateTime?
+  backupStatus      String    @default("unknown")
+  syncStatus        String    @default("unknown")
+  cloudHealth       String    @default("unknown")
+  cloudNotifiedAt   DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   tenant        Tenant?        @relation(fields: [tenantId], references: [id])
   users         User[]
@@ -61,6 +68,8 @@ model Company {
 
   @@index([tenantId])
   @@index([status])
+  @@index([cloudHealth])
+  @@index([lastBackupAt])
 }
 
 model User {
