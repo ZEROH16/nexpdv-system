@@ -1,6 +1,6 @@
 {
   "name": "@nexpdv/desktop",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "dist/main/main.cjs",
@@ -21,8 +21,6 @@
   "dependencies": {
     "@nexpdv/shared": "0.1.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "electron": "^42.1.0",
-    "electron-builder": "^24.13.3",
     "electron-updater": "^6.8.3",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
@@ -38,6 +36,8 @@
     "autoprefixer": "^10.4.19",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
+    "electron": "42.1.0",
+    "electron-builder": "^24.13.3",
     "postcss": "^8.4.39",
     "tailwindcss": "^3.4.6",
     "tsup": "^8.2.4",
@@ -57,12 +57,23 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "publisherName": "Nex Solutions",
+      "artifactName": "NexPDV_Installer_v${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NexPDV",
+      "runAfterFinish": true
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://updates.nexpdv.com.br/desktop/stable"
     }
-  }
+  },
+  "author": "Nex Solutions",
+  "description": "NexPDV Desktop - PDV comercial offline-first para Windows."
 }

@@ -6,6 +6,8 @@ node_modules/
 *.tsbuildinfo
 dist/
 build/
+!apps/desktop/build/
+!apps/desktop/build/**
 out/
 coverage/
 .expo/
