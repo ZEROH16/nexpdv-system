@@ -28,10 +28,14 @@ UPDATE_MANDATORY=false
 
 O Railway injeta `PORT`; a API usa `process.env.PORT` em producao e `API_PORT` apenas como fallback de desenvolvimento.
 
-O build da API no Railway usa o script raiz abaixo e nao roda `npm ci` dentro do `buildCommand`, porque o Nixpacks ja instala as dependencias antes do build:
+No servico da API, configure os comandos do Railway assim. O build nao roda `npm ci` dentro do `buildCommand`, porque o Nixpacks ja instala as dependencias antes do build:
 
 ```bash
+# Build
 npm run railway:api
+
+# Start
+npm run start -w @nexpdv/api
 ```
 
 ## 2. Banco PostgreSQL
@@ -97,16 +101,24 @@ Resposta esperada:
 Configure o Admin com a API de producao:
 
 ```env
-VITE_NEXPDV_API_URL=https://sua-api-nexpdv.up.railway.app
+VITE_NEXPDV_API_URL=https://nexpdvapi-production.up.railway.app
 ```
 
-Build:
+No servico do Admin, configure os comandos do Railway assim:
 
 ```bash
-npm run build -w @nexpdv/admin
+# Build
+npm run railway:admin
+
+# Start
+npm run start -w @nexpdv/admin
 ```
 
-O Admin pode ser publicado como site estatico em Vercel, Railway Static ou outro provedor. Depois de publicar, atualize `ADMIN_APP_URL` e `CORS_ORIGIN` na API.
+O script `railway:admin` compila o pacote compartilhado e faz o build Vite do Admin. Se `VITE_NEXPDV_API_URL` nao estiver definida no painel Railway, ele usa `https://nexpdvapi-production.up.railway.app` como padrao de producao.
+
+O Admin e servido por `apps/admin/server.mjs`, usando `PORT` do Railway e `0.0.0.0`. Ele expoe `/health` estatico apenas para o servico Admin, sem consultar `/health` da API. Depois de publicar, atualize `ADMIN_APP_URL` e `CORS_ORIGIN` na API com a URL publica do Admin.
+
+O `railway.json` do repositorio nao define `buildCommand`, `startCommand` ou `healthcheckPath` globais para evitar que todos os servicos executem o deploy da API. Configure os comandos acima diretamente em cada servico Railway.
 
 ## 6. Desktop com API Cloud
 

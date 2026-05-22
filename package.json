@@ -15,7 +15,8 @@
     "dist": "npm run dist -w @nexpdv/desktop",
     "seed": "npm run seed -w @nexpdv/api",
     "validate:structure": "node scripts/validate-structure.mjs",
-    "railway:api": "npm run build -w @nexpdv/shared && npm run prisma:generate:prod -w @nexpdv/api && npm run build -w @nexpdv/api"
+    "railway:api": "npm run build -w @nexpdv/shared && npm run prisma:generate:prod -w @nexpdv/api && npm run build -w @nexpdv/api",
+    "railway:admin": "node scripts/railway-admin-build.mjs"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^7.18.0",
