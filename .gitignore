@@ -9,6 +9,8 @@ build/
 !apps/desktop/build/
 !apps/desktop/build/**
 out/
+release/
+release-v*/
 coverage/
 .expo/
 .env

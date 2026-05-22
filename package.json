@@ -1,6 +1,6 @@
 {
   "name": "nexpdv",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "NexPDV - ecossistema comercial offline-first para varejo brasileiro.",
   "workspaces": [

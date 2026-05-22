@@ -385,7 +385,7 @@ export const Settings = () => {
       const status = await desktopApi.system.cloudApiReset(cloudApiForm);
       setCloudApiStatus(status);
       setCloudApiForm((current) => ({ ...current, apiUrl: status.apiUrl || "", password: "", pin: "" }));
-      setMessage("Configuracao local da API Cloud restaurada.");
+      setMessage("URL padrao da API Cloud restaurada.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Nao foi possivel restaurar a API Cloud.");
     } finally {
@@ -776,7 +776,7 @@ export const Settings = () => {
             </div>
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
               <span className="break-all">Config Windows: {cloudApiStatus?.programDataPath ?? "C:\\ProgramData\\NexPDV\\config.json"}</span>
-              <Button variant="secondary" disabled={cloudApiBusy} onClick={resetCloudApi}>Restaurar URL local</Button>
+              <Button variant="secondary" disabled={cloudApiBusy} onClick={resetCloudApi}>Restaurar URL padrao</Button>
             </div>
             {cloudApiStatus?.health ? (
               <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">

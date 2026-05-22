@@ -64,7 +64,7 @@ export interface UpdateState {
 
 export interface CloudApiStatus {
   apiUrl?: string;
-  source: "programData" | "env" | "local" | "devFallback" | "missing";
+  source: "programData" | "env" | "local" | "default" | "devFallback" | "missing";
   sourceLabel: string;
   programDataPath: string;
   localConfigPath: string;

@@ -6,6 +6,7 @@ import { registerIpcHandlers } from "./ipc";
 import { SyncEngine } from "./syncEngine";
 import { resetLocalDataIfRequested } from "./devResetLocal";
 import { registerAutoUpdate } from "./autoUpdateService";
+import { ensureDefaultCloudApiConfig } from "./cloudApiConfig";
 
 const bootstrapLogPath = path.join(process.cwd(), "electron-main.log");
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -58,6 +59,14 @@ const ensureFile = (label: string, filePath: string): void => {
 
 const createWindow = async (): Promise<void> => {
   logMain(`Bootstrap iniciado. cwd=${process.cwd()} mainDir=${getMainDir()}`);
+  const cloudApiConfig = ensureDefaultCloudApiConfig();
+  if (cloudApiConfig.error) {
+    logMain(`Configuracao padrao da API Cloud nao foi criada: ${cloudApiConfig.filePath}`, cloudApiConfig.error);
+  } else if (cloudApiConfig.permissionError) {
+    logMain(`Configuracao da API Cloud criada/validada com alerta de permissao: ${cloudApiConfig.filePath}`, cloudApiConfig.permissionError);
+  } else if (cloudApiConfig.created) {
+    logMain(`Configuracao padrao da API Cloud criada: ${cloudApiConfig.filePath}`);
+  }
   ensureFile("Preload", getPreloadPath());
   logMain(`Preload OK: ${getPreloadPath()}`);
 

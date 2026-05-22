@@ -19,6 +19,7 @@ nsis:
   createStartMenuShortcut: true
   shortcutName: NexPDV
   runAfterFinish: true
+  include: build/installer.nsh
 publish:
   provider: generic
   url: https://updates.nexpdv.com.br/desktop/stable

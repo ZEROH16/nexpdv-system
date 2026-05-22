@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { app } from "electron";
 
-export type CloudApiSource = "programData" | "env" | "local" | "devFallback" | "missing";
+export type CloudApiSource = "programData" | "env" | "local" | "default" | "devFallback" | "missing";
 
 export interface CloudApiStatus {
   apiUrl?: string;
@@ -23,14 +24,73 @@ export interface CloudApiStatus {
   };
 }
 
+export const DEFAULT_CLOUD_API_URL = "https://nexpdvapi-production.up.railway.app";
 const DEFAULT_DEV_API_URL = "http://localhost:3333";
 const CONFIG_FILE_NAME = "config.json";
 const LOCAL_CONFIG_FILE_NAME = "cloud-api-config.json";
 
 const isDevelopmentRuntime = () => !app.isPackaged || process.env.NODE_ENV === "development" || Boolean(process.env.VITE_DEV_SERVER_URL);
 
+const programDataDirectoryPath = () => path.join(process.env.PROGRAMDATA || "C:\\ProgramData", "NexPDV");
 const programDataPath = () => path.join(process.env.PROGRAMDATA || "C:\\ProgramData", "NexPDV", CONFIG_FILE_NAME);
 const localConfigPath = () => path.join(app.getPath("userData"), LOCAL_CONFIG_FILE_NAME);
+const configFileContents = (apiUrl: string) => `${JSON.stringify({ apiUrl }, null, 2)}\n`;
+
+const ensureWindowsReadWriteAccess = (directoryPath: string): string | undefined => {
+  if (process.platform !== "win32") return undefined;
+
+  const result = spawnSync("icacls", [directoryPath, "/grant", "*S-1-5-11:(OI)(CI)M", "/T", "/C"], {
+    encoding: "utf8",
+    windowsHide: true
+  });
+  if (result.error) return result.error.message;
+  if (result.status !== 0) return (result.stderr || result.stdout || `icacls saiu com codigo ${result.status}.`).trim();
+
+  try {
+    accessSync(directoryPath, constants.R_OK | constants.W_OK);
+  } catch (error) {
+    return error instanceof Error ? error.message : "Sem permissao de leitura/escrita no diretorio da API Cloud.";
+  }
+  return undefined;
+};
+
+const writeProgramDataConfig = (apiUrl: string, overwrite: boolean): string | undefined => {
+  const directoryPath = programDataDirectoryPath();
+  mkdirSync(directoryPath, { recursive: true });
+  writeFileSync(programDataPath(), configFileContents(apiUrl), { encoding: "utf8", flag: overwrite ? "w" : "wx" });
+  return ensureWindowsReadWriteAccess(directoryPath);
+};
+
+export interface CloudApiBootstrapResult {
+  filePath: string;
+  created: boolean;
+  skipped: boolean;
+  permissionError?: string;
+  error?: string;
+}
+
+export const ensureDefaultCloudApiConfig = (): CloudApiBootstrapResult => {
+  const filePath = programDataPath();
+  if (isDevelopmentRuntime()) {
+    return { filePath, created: false, skipped: true };
+  }
+
+  try {
+    if (!existsSync(filePath)) {
+      const permissionError = writeProgramDataConfig(DEFAULT_CLOUD_API_URL, false);
+      return { filePath, created: true, skipped: false, permissionError };
+    }
+
+    const permissionError = ensureWindowsReadWriteAccess(programDataDirectoryPath());
+    return { filePath, created: false, skipped: false, permissionError };
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? (error as { code?: unknown }).code : undefined;
+    if (code === "EEXIST") {
+      return { filePath, created: false, skipped: false };
+    }
+    return { filePath, created: false, skipped: false, error: error instanceof Error ? error.message : "Nao foi possivel criar a configuracao da API Cloud." };
+  }
+};
 
 const readConfigApiUrl = (filePath: string): string | undefined => {
   if (!existsSync(filePath)) return undefined;
@@ -60,6 +120,7 @@ const sourceLabel = (source: CloudApiSource) => {
     programData: "Config Windows",
     env: "Variavel de ambiente",
     local: "Config local",
+    default: "Padrao cloud",
     devFallback: "Localhost dev",
     missing: "Nao configurada"
   };
@@ -90,6 +151,12 @@ export const getCloudApiStatus = (): CloudApiStatus => {
   const external = tryStatus("programData", readConfigApiUrl(programDataPath()));
   if (external) return external;
 
+  if (!isDevelopmentRuntime()) {
+    ensureDefaultCloudApiConfig();
+    const ensuredExternal = tryStatus("programData", readConfigApiUrl(programDataPath()));
+    if (ensuredExternal) return ensuredExternal;
+  }
+
   const fromEnv = tryStatus("env", envApiUrl());
   if (fromEnv) return fromEnv;
 
@@ -97,20 +164,32 @@ export const getCloudApiStatus = (): CloudApiStatus => {
   if (local) return local;
 
   if (isDevelopmentRuntime()) return statusFrom("devFallback", DEFAULT_DEV_API_URL);
-  return statusFrom("missing");
+  return statusFrom("default", DEFAULT_CLOUD_API_URL);
 };
 
 export const getCloudApiBaseUrl = (): string | undefined => getCloudApiStatus().apiUrl;
 
 export const saveLocalCloudApiUrl = (apiUrl: string): CloudApiStatus => {
   const normalized = normalizeApiUrl(apiUrl);
+  if (!isDevelopmentRuntime()) {
+    const permissionError = writeProgramDataConfig(normalized, true);
+    if (permissionError) throw new Error(`Configuracao salva, mas nao foi possivel garantir permissao no Windows: ${permissionError}`);
+    return getCloudApiStatus();
+  }
+
   const filePath = localConfigPath();
   mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify({ apiUrl: normalized }, null, 2)}\n`, "utf8");
+  writeFileSync(filePath, configFileContents(normalized), "utf8");
   return getCloudApiStatus();
 };
 
 export const resetLocalCloudApiUrl = (): CloudApiStatus => {
+  if (!isDevelopmentRuntime()) {
+    const permissionError = writeProgramDataConfig(DEFAULT_CLOUD_API_URL, true);
+    if (permissionError) throw new Error(`URL padrao restaurada, mas nao foi possivel garantir permissao no Windows: ${permissionError}`);
+    return getCloudApiStatus();
+  }
+
   const filePath = localConfigPath();
   if (existsSync(filePath)) rmSync(filePath, { force: true });
   return getCloudApiStatus();
