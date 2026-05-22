@@ -93,6 +93,10 @@ contextBridge.exposeInMainWorld("nexpdv", {
     backupState: () => invoke("system:backup-state"),
     backupExport: () => invoke("system:backup-export"),
     backupRestore: (filePath: string) => invoke("system:backup-restore", filePath),
+    cloudApiStatus: () => invoke("cloud-api:status"),
+    cloudApiTest: (input?: unknown) => invoke("cloud-api:test", input),
+    cloudApiSave: (input: unknown) => invoke("cloud-api:save", input),
+    cloudApiReset: (input: unknown) => invoke("cloud-api:reset", input),
     resetLocal: () => invoke("system:reset-local")
   },
   pix: {

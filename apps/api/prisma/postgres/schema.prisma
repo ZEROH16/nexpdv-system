@@ -1,0 +1,428 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Schema de producao para PostgreSQL Cloud. O schema raiz continua em SQLite para desenvolvimento local.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  companies Company[]
+  users     User[]
+  plans     Plan[]
+  auditLogs AuditLog[]
+}
+
+model Company {
+  id                String    @id @default(cuid())
+  tenantId          String?
+  name              String
+  document          String
+  tradeName         String?
+  stateRegistration String?
+  phone             String?
+  whatsapp          String?
+  email             String?
+  address           String?
+  city              String?
+  state             String?
+  zipCode           String?
+  logoUrl           String?
+  internalNotes     String?
+  accountManager    String?
+  status            String    @default("active")
+  backupStartedAt   DateTime?
+  lastBackupAt      DateTime?
+  lastSyncAt        DateTime?
+  backupStatus      String    @default("unknown")
+  syncStatus        String    @default("unknown")
+  cloudHealth       String    @default("unknown")
+  cloudNotifiedAt   DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  tenant        Tenant?        @relation(fields: [tenantId], references: [id])
+  users         User[]
+  products      Product[]
+  categories    Category[]
+  customers     Customer[]
+  sales         Sale[]
+  cashRegisters CashRegister[]
+  settings      Setting[]
+  licenses      License[]
+  subscriptions Subscription[]
+  devices       Device[]
+  deviceTokens  DeviceToken[]
+  syncJobs      SyncJob[]
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([cloudHealth])
+  @@index([lastBackupAt])
+}
+
+model User {
+  id                          String    @id @default(cuid())
+  tenantId                    String?
+  companyId                   String
+  name                        String
+  email                       String    @unique
+  phone                       String?
+  passwordHash                String
+  role                        String    @default("cashier")
+  platformRole                String    @default("company_user")
+  permissionsJson             String    @default("{}")
+  active                      Boolean   @default(true)
+  refreshTokenHash            String?
+  twoFactorEnabled            Boolean   @default(false)
+  twoFactorSecret             String?
+  recoveryCodesHash           String?
+  firstAccessRequired         Boolean   @default(false)
+  initialAccessTokenHash      String?
+  initialAccessTokenExpiresAt DateTime?
+  initialAccessCompletedAt    DateTime?
+  passwordChangedAt           DateTime?
+  failedLoginAttempts         Int       @default(0)
+  lockedUntil                 DateTime?
+  lastLoginAt                 DateTime?
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+
+  tenant    Tenant?    @relation(fields: [tenantId], references: [id])
+  company   Company    @relation(fields: [companyId], references: [id])
+  sales     Sale[]
+  auditLogs AuditLog[]
+
+  @@index([tenantId])
+  @@index([companyId])
+  @@index([firstAccessRequired])
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  color     String   @default("#2563EB")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  products Product[]
+}
+
+model Product {
+  id         String   @id @default(cuid())
+  companyId  String
+  categoryId String?
+  name       String
+  barcode    String?
+  sku        String?
+  brand      String?
+  cost       Float    @default(0)
+  price      Float    @default(0)
+  margin     Float    @default(0)
+  stock      Float    @default(0)
+  minStock   Float    @default(0)
+  unit       String   @default("UN")
+  imageUrl   String?
+  active     Boolean  @default(true)
+  syncStatus String   @default("synced")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  company  Company    @relation(fields: [companyId], references: [id])
+  category Category?  @relation(fields: [categoryId], references: [id])
+  items    SaleItem[]
+
+  @@index([companyId, name])
+  @@index([companyId, barcode])
+}
+
+model Customer {
+  id          String   @id @default(cuid())
+  companyId   String
+  name        String
+  document    String?
+  phone       String?
+  whatsapp    String?
+  address     String?
+  notes       String?
+  creditLimit Float    @default(0)
+  balance     Float    @default(0)
+  syncStatus  String   @default("synced")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  sales   Sale[]
+}
+
+model Sale {
+  id           String   @id @default(cuid())
+  companyId    String
+  number       String
+  operatorId   String
+  operatorName String
+  customerId   String?
+  customerName String?
+  subtotal     Float
+  discount     Float
+  total        Float
+  profit       Float
+  notes        String?
+  status       String   @default("completed")
+  syncStatus   String   @default("synced")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  company  Company    @relation(fields: [companyId], references: [id])
+  operator User       @relation(fields: [operatorId], references: [id])
+  customer Customer?  @relation(fields: [customerId], references: [id])
+  items    SaleItem[]
+  payments Payment[]
+
+  @@index([companyId, createdAt])
+  @@index([companyId, number])
+}
+
+model SaleItem {
+  id          String @id @default(cuid())
+  saleId      String
+  productId   String
+  productName String
+  quantity    Float
+  unitPrice   Float
+  discount    Float  @default(0)
+  total       Float
+  cost        Float
+
+  sale    Sale    @relation(fields: [saleId], references: [id])
+  product Product @relation(fields: [productId], references: [id])
+}
+
+model Payment {
+  id     String @id @default(cuid())
+  saleId String
+  method String
+  amount Float
+  change Float  @default(0)
+
+  sale Sale @relation(fields: [saleId], references: [id])
+}
+
+model CashRegister {
+  id             String    @id @default(cuid())
+  companyId      String
+  operatorId     String
+  operatorName   String
+  openedAt       DateTime  @default(now())
+  closedAt       DateTime?
+  openingAmount  Float
+  expectedAmount Float
+  countedAmount  Float?
+  difference     Float?
+  status         String    @default("open")
+
+  company   Company        @relation(fields: [companyId], references: [id])
+  movements CashMovement[]
+}
+
+model CashMovement {
+  id             String   @id @default(cuid())
+  cashRegisterId String
+  type           String
+  description    String
+  amount         Float
+  createdAt      DateTime @default(now())
+
+  cashRegister CashRegister @relation(fields: [cashRegisterId], references: [id])
+}
+
+model Setting {
+  id        String   @id @default(cuid())
+  companyId String
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+
+  @@unique([companyId, key])
+}
+
+model License {
+  id                String    @id @default(cuid())
+  companyId         String
+  planId            String?
+  key               String    @unique
+  planCode          String    @default("OFFLINE")
+  status            String    @default("trial")
+  validUntil        DateTime
+  offlineGraceUntil DateTime?
+  demoMode          Boolean   @default(true)
+  featuresJson      String    @default("{}")
+  maxDevices        Int       @default(1)
+  internalNotes     String?
+  activatedAt       DateTime?
+  lastValidatedAt   DateTime?
+  lastSyncedAt      DateTime?
+  blockedReason     String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  company Company  @relation(fields: [companyId], references: [id])
+  plan    Plan?    @relation(fields: [planId], references: [id])
+  devices Device[]
+
+  @@index([companyId])
+  @@index([status])
+  @@index([validUntil])
+}
+
+model Plan {
+  id                String   @id @default(cuid())
+  tenantId          String?
+  code              String   @unique
+  name              String
+  description       String?
+  price             Float
+  maxStores         Int
+  maxUsers          Int
+  maxDevices        Int      @default(1)
+  billingPeriod     String   @default("monthly")
+  graceDays         Int      @default(7)
+  featuresJson      String   @default("{}")
+  extraFeaturesJson String   @default("{}")
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant        Tenant?        @relation(fields: [tenantId], references: [id])
+  subscriptions Subscription[]
+  licenses      License[]
+}
+
+model Subscription {
+  id        String   @id @default(cuid())
+  companyId String
+  planId    String
+  status    String
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  plan    Plan    @relation(fields: [planId], references: [id])
+
+  @@index([companyId])
+  @@index([status])
+}
+
+model Device {
+  id            String    @id @default(cuid())
+  companyId     String
+  licenseId     String?
+  deviceId      String
+  shortCode     String?
+  name          String
+  fingerprint   String
+  hostName      String?
+  os            String?
+  appVersion    String?
+  platform      String    @default("desktop")
+  status        String    @default("active")
+  online        Boolean   @default(false)
+  lastIp        String?
+  lastSeenAt    DateTime?
+  activatedAt   DateTime  @default(now())
+  deactivatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  company  Company   @relation(fields: [companyId], references: [id])
+  license  License?  @relation(fields: [licenseId], references: [id])
+  syncJobs SyncJob[]
+
+  @@unique([companyId, deviceId])
+  @@index([companyId, status])
+}
+
+model SyncJob {
+  id          String    @id @default(cuid())
+  companyId   String
+  deviceId    String?
+  entity      String
+  entityId    String?
+  operation   String
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  conflict    Boolean   @default(false)
+  payload     String?
+  lastError   String?
+  scheduledAt DateTime  @default(now())
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+  device  Device? @relation(fields: [deviceId], references: [id])
+
+  @@index([companyId, status])
+  @@index([deviceId])
+}
+
+model SyncLog {
+  id        String   @id @default(cuid())
+  companyId String
+  deviceId  String
+  entity    String
+  entityId  String
+  operation String
+  status    String
+  message   String?
+  payload   String?
+  createdAt DateTime @default(now())
+}
+
+model DeviceToken {
+  id        String   @id @default(cuid())
+  companyId String
+  userId    String?
+  token     String   @unique
+  platform  String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  userId    String?
+  action    String
+  entity    String?
+  entityId  String?
+  details   String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id])
+  user   User?   @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@index([action])
+}
+

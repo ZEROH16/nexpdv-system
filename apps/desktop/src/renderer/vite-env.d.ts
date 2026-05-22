@@ -83,6 +83,10 @@ declare global {
         backupState: <T>() => Promise<T>;
         backupExport: <T>() => Promise<T>;
         backupRestore: <T>(filePath: string) => Promise<T>;
+        cloudApiStatus: <T>() => Promise<T>;
+        cloudApiTest: <T>(input?: unknown) => Promise<T>;
+        cloudApiSave: <T>(input: unknown) => Promise<T>;
+        cloudApiReset: <T>(input: unknown) => Promise<T>;
         resetLocal: <T>() => Promise<T>;
       };
       pix: {

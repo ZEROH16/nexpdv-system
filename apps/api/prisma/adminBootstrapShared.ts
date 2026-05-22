@@ -8,6 +8,7 @@ export interface AdminArgs {
   email: string;
   password: string;
   name: string;
+  force?: boolean;
 }
 
 export interface ResetArgs {
@@ -30,6 +31,8 @@ export const parseArgs = (argv: string[]) => {
     if (value && !value.startsWith("--")) {
       output.set(rawKey, value);
       if (!rawValue) index += 1;
+    } else {
+      output.set(rawKey, "true");
     }
   }
   return output;
@@ -104,6 +107,9 @@ export const bootstrapAdmin = async (input: AdminArgs) => {
     const initialToken = generateInitialToken();
     const expiresAt = tokenExpiry();
     const existing = await prisma.user.findUnique({ where: { email: input.email } });
+    if (existing && !input.force) {
+      throw new Error(`Usuario admin ${input.email} ja existe. Use --force para atualizar senha, token inicial e 2FA.`);
+    }
     const user = await prisma.user.upsert({
       where: { email: input.email },
       update: {

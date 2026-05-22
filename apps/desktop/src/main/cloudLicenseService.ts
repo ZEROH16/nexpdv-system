@@ -3,6 +3,7 @@ import os from "node:os";
 import { app } from "electron";
 import type { LicenseActivationInput, LicensePlan, LicenseStatus, LicenseFeatures } from "@nexpdv/shared";
 import { createOnlineLicenseActivation, type LocalLicenseRecord } from "./licenseService";
+import { getCloudApiBaseUrl } from "./cloudApiConfig";
 
 interface ActivationResponse {
   ok: boolean;
@@ -30,14 +31,6 @@ interface ActivationResponse {
   };
 }
 
-const DEFAULT_DEV_CLOUD_API_URL = "http://localhost:3333";
-
-const cloudBaseUrl = (): string | undefined => {
-  const fallbackDevUrl = !app.isPackaged || process.env.NODE_ENV === "development" || process.env.VITE_DEV_SERVER_URL ? DEFAULT_DEV_CLOUD_API_URL : "";
-  const value = (process.env.NEXPDV_CLOUD_API_URL || process.env.VITE_NEXPDV_CLOUD_API_URL || fallbackDevUrl).trim();
-  return value ? value.replace(/\/$/, "") : undefined;
-};
-
 const deviceFingerprint = (): string =>
   createHash("sha256")
     .update([os.hostname(), os.platform(), os.arch(), os.userInfo().username].join("|"))
@@ -57,7 +50,7 @@ export const getCloudDeviceInfo = () => {
 };
 
 export const activateLicenseOnline = async (input: LicenseActivationInput, companyId: string): Promise<LocalLicenseRecord | undefined> => {
-  const baseUrl = cloudBaseUrl();
+  const baseUrl = getCloudApiBaseUrl();
   if (!baseUrl) return undefined;
 
   const controller = new AbortController();
@@ -90,10 +83,10 @@ export const activateLicenseOnline = async (input: LicenseActivationInput, compa
     );
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("API Cloud indisponivel ou demorou para responder. Confira se o servidor SaaS local esta em http://localhost:3333.");
+      throw new Error("API Cloud indisponivel ou demorou para responder. Confira sua internet ou a URL configurada da API.");
     }
     if (error instanceof TypeError) {
-      throw new Error("API Cloud indisponivel. Confira se o servidor SaaS local esta rodando em http://localhost:3333.");
+      throw new Error("Sem internet ou API Cloud indisponivel. O PDV continua offline apos ativado.");
     }
     throw error;
   } finally {

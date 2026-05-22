@@ -1,4 +1,11 @@
-const API_URL = import.meta.env.VITE_CLOUD_API_URL ?? "http://localhost:3333";
+const resolveApiUrl = () => {
+  const configured = import.meta.env.VITE_NEXPDV_API_URL;
+  const legacyDev = import.meta.env.DEV ? import.meta.env.VITE_CLOUD_API_URL : undefined;
+  const value = configured || legacyDev || (import.meta.env.DEV ? "http://localhost:3333" : "");
+  return value.replace(/\/$/, "");
+};
+
+const API_URL = resolveApiUrl();
 
 export interface Session {
   token: string;
@@ -35,6 +42,9 @@ export interface FirstAccessSetup {
 export type LoginResult = Session | FirstAccessRequired;
 
 const request = async <T>(path: string, options: RequestInit = {}): Promise<T> => {
+  if (!API_URL) {
+    throw new Error("VITE_NEXPDV_API_URL nao configurada para o painel admin.");
+  }
   const token = localStorage.getItem("nexpdv_admin_token");
   const headers: Record<string, string> = {
     ...(options.body ? { "Content-Type": "application/json" } : {}),

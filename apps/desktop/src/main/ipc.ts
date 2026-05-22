@@ -5,10 +5,18 @@ import { assertLicensedModule, checkLocalLicense } from "./licenseService";
 import { listThermalPrinters, openCashDrawer, printReceipt, printTestReceipt, type ReceiptPrintContext } from "./receiptPrinter";
 import { renderQrSvgDataUrl } from "./qrCodeRenderer";
 import { requestLocalResetOnNextStart } from "./devResetLocal";
+import { getCloudApiStatus, resetLocalCloudApiUrl, saveLocalCloudApiUrl, testCloudApiConnection } from "./cloudApiConfig";
 
 interface ReceiptPrintRequest {
   html: string;
   context?: ReceiptPrintContext;
+}
+
+interface CloudApiChangeRequest {
+  apiUrl?: string;
+  login?: string;
+  password?: string;
+  pin?: string;
 }
 
 const printAuditLabel = (context?: ReceiptPrintContext): string => {
@@ -79,6 +87,34 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("system:backup-state", () => db.getBackupState());
   ipcMain.handle("system:backup-export", () => db.exportLocalBackup());
   ipcMain.handle("system:backup-restore", (_event, filePath: string) => db.restoreLocalBackup(filePath));
+  ipcMain.handle("cloud-api:status", () => getCloudApiStatus());
+  ipcMain.handle("cloud-api:test", (_event, input?: { apiUrl?: string }) => testCloudApiConnection(input?.apiUrl));
+  ipcMain.handle("cloud-api:save", (_event, input: CloudApiChangeRequest) => {
+    const auth = db.authorizeCredential({
+      login: input.login,
+      password: input.password,
+      pin: input.pin,
+      permission: "access_settings",
+      requireManager: true
+    });
+    if (!auth.ok) throw new Error(auth.message);
+    const status = saveLocalCloudApiUrl(input.apiUrl ?? "");
+    db.recordAuditEvent({ action: "api cloud alterada", actor: auth.user?.name, details: status.apiUrl ?? "sem url" });
+    return status;
+  });
+  ipcMain.handle("cloud-api:reset", (_event, input: CloudApiChangeRequest) => {
+    const auth = db.authorizeCredential({
+      login: input.login,
+      password: input.password,
+      pin: input.pin,
+      permission: "access_settings",
+      requireManager: true
+    });
+    if (!auth.ok) throw new Error(auth.message);
+    const status = resetLocalCloudApiUrl();
+    db.recordAuditEvent({ action: "api cloud restaurada", actor: auth.user?.name, details: status.apiUrl ?? status.sourceLabel });
+    return status;
+  });
   ipcMain.handle("system:reset-local", () => {
     if (!process.env.VITE_DEV_SERVER_URL) throw new Error("Reset local esta disponivel apenas em desenvolvimento.");
     const auth = db.getAuthState();

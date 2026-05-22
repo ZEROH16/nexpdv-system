@@ -3,6 +3,7 @@ import type { SyncQueueItem, SyncResult } from "@nexpdv/shared";
 import { SYNC_BATCH_SIZE } from "@nexpdv/shared";
 import type { LocalDatabase } from "./localDatabase";
 import { checkLocalLicense } from "./licenseService";
+import { getCloudApiBaseUrl } from "./cloudApiConfig";
 
 export interface SyncState {
   online: boolean;
@@ -18,7 +19,7 @@ export class SyncEngine {
 
   constructor(
     private readonly db: LocalDatabase,
-    private readonly cloudUrl = process.env.NEXPDV_CLOUD_API_URL ?? "http://localhost:3333"
+    private readonly cloudUrl?: string
   ) {}
 
   start(window: BrowserWindow): void {
@@ -83,7 +84,11 @@ export class SyncEngine {
   }
 
   private async push(queue: SyncQueueItem[]): Promise<SyncResult> {
-    const response = await fetch(`${this.cloudUrl}/sync/push`, {
+    const cloudUrl = this.cloudUrl ?? getCloudApiBaseUrl();
+    if (!cloudUrl) {
+      throw new Error("API Cloud nao configurada. Vendas permanecem salvas localmente para sincronizacao futura.");
+    }
+    const response = await fetch(`${cloudUrl}/sync/push`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

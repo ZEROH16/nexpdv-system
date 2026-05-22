@@ -62,6 +62,25 @@ export interface UpdateState {
   checkedAt?: string;
 }
 
+export interface CloudApiStatus {
+  apiUrl?: string;
+  source: "programData" | "env" | "local" | "devFallback" | "missing";
+  sourceLabel: string;
+  programDataPath: string;
+  localConfigPath: string;
+  productionReady: boolean;
+  message: string;
+  lastError?: string;
+  health?: {
+    status?: string;
+    product?: string;
+    version?: string;
+    environment?: string;
+    database?: string;
+    time?: string;
+  };
+}
+
 export interface CashSummary {
   cashRegister?: CashRegister;
   salesTotal: number;
@@ -301,6 +320,10 @@ export const desktopApi = {
     backupState: () => window.nexpdv.system.backupState<BackupState>(),
     backupExport: () => window.nexpdv.system.backupExport<BackupState & { filePath: string }>(),
     backupRestore: (filePath: string) => window.nexpdv.system.backupRestore<BackupState>(filePath),
+    cloudApiStatus: () => window.nexpdv.system.cloudApiStatus<CloudApiStatus>(),
+    cloudApiTest: (apiUrl?: string) => window.nexpdv.system.cloudApiTest<CloudApiStatus>({ apiUrl }),
+    cloudApiSave: (input: { apiUrl: string; login?: string; password?: string; pin?: string }) => window.nexpdv.system.cloudApiSave<CloudApiStatus>(input),
+    cloudApiReset: (input: { login?: string; password?: string; pin?: string }) => window.nexpdv.system.cloudApiReset<CloudApiStatus>(input),
     resetLocal: () => window.nexpdv.system.resetLocal<{ ok: boolean; restarting: boolean; markerPath: string }>()
   },
   pix: {
