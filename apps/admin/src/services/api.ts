@@ -7,6 +7,18 @@ const resolveApiUrl = () => {
 
 const API_URL = resolveApiUrl();
 
+const AUTH_ENDPOINTS = {
+  login: "/auth/login",
+  me: "/auth/me",
+  refresh: "/auth/refresh",
+  logout: "/auth/logout",
+  firstAccessStart: "/auth/first-access/start",
+  firstAccessComplete: "/auth/first-access/complete",
+  setup2fa: "/auth/2fa/setup",
+  enable2fa: "/auth/2fa/enable",
+  disable2fa: "/auth/2fa/disable"
+} as const;
+
 export interface Session {
   token: string;
   refreshToken?: string;
@@ -81,7 +93,7 @@ const isSession = (result: LoginResult): result is Session => "token" in result;
 
 export const api = {
   login: async (email: string, password: string, twoFactorCode?: string, recoveryCode?: string) => {
-    const result = await request<LoginResult>("/auth/login", {
+    const result = await request<LoginResult>(AUTH_ENDPOINTS.login, {
       method: "POST",
       body: JSON.stringify({ email, password, twoFactorCode, recoveryCode })
     });
@@ -94,28 +106,28 @@ export const api = {
     const user = localStorage.getItem("nexpdv_admin_user");
     return token && user ? ({ token, user: JSON.parse(user) } as Session) : undefined;
   },
-  me: () => request<Session["user"]>("/auth/me"),
+  me: () => request<Session["user"]>(AUTH_ENDPOINTS.me),
   refresh: async () => {
     const refreshToken = localStorage.getItem("nexpdv_admin_refresh");
     if (!refreshToken) throw new Error("Sessao expirada.");
-    const session = await request<Session>("/auth/refresh", { method: "POST", body: JSON.stringify({ refreshToken }) });
+    const session = await request<Session>(AUTH_ENDPOINTS.refresh, { method: "POST", body: JSON.stringify({ refreshToken }) });
     persistSession(session);
     return session;
   },
   logout: async () => {
-    await request("/auth/logout", { method: "POST" }).catch(() => undefined);
+    await request(AUTH_ENDPOINTS.logout, { method: "POST" }).catch(() => undefined);
     clearSession();
   },
   firstAccessStart: (input: { email: string; password: string; initialToken: string }) =>
-    request<FirstAccessSetup>("/auth/first-access/start", { method: "POST", body: JSON.stringify(input) }),
+    request<FirstAccessSetup>(AUTH_ENDPOINTS.firstAccessStart, { method: "POST", body: JSON.stringify(input) }),
   firstAccessComplete: async (input: { firstAccessSessionToken: string; newPassword: string; twoFactorCode: string }) => {
-    const session = await request<Session & { recoveryCodes: string[] }>("/auth/first-access/complete", { method: "POST", body: JSON.stringify(input) });
+    const session = await request<Session & { recoveryCodes: string[] }>(AUTH_ENDPOINTS.firstAccessComplete, { method: "POST", body: JSON.stringify(input) });
     persistSession(session);
     return session;
   },
-  setup2fa: () => request<{ secret: string; otpauthUrl: string; qrCodeDataUrl: string }>("/auth/2fa/setup", { method: "POST", body: JSON.stringify({}) }),
-  enable2fa: (code: string) => request<{ recoveryCodes: string[] }>("/auth/2fa/enable", { method: "POST", body: JSON.stringify({ code }) }),
-  disable2fa: () => request<{ ok: boolean }>("/auth/2fa/disable", { method: "POST", body: JSON.stringify({}) }),
+  setup2fa: () => request<{ secret: string; otpauthUrl: string; qrCodeDataUrl: string }>(AUTH_ENDPOINTS.setup2fa, { method: "POST", body: JSON.stringify({}) }),
+  enable2fa: (code: string) => request<{ recoveryCodes: string[] }>(AUTH_ENDPOINTS.enable2fa, { method: "POST", body: JSON.stringify({ code }) }),
+  disable2fa: () => request<{ ok: boolean }>(AUTH_ENDPOINTS.disable2fa, { method: "POST", body: JSON.stringify({}) }),
   dashboard: () => request<any>("/admin/dashboard"),
   companies: () => request<any[]>("/admin/companies"),
   createCompany: (input: any) => request<any>("/companies", { method: "POST", body: JSON.stringify(input) }),

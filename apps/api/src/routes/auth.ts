@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { audit } from "../services/audit.js";
 import { generateTwoFactorSecret, otpauthUrl, qrCodeDataUrl, recoveryCodes, verifyTotp } from "../services/twoFactor.js";
@@ -124,7 +124,7 @@ const issueSession = async (
 };
 
 export const authRoutes = async (app: FastifyInstance) => {
-  app.post("/auth/login", async (request, reply) => {
+  const handleLogin = async (request: FastifyRequest, reply: FastifyReply) => {
     const input = loginSchema.parse(request.body);
     const user = await app.prisma.user.findUnique({ where: { email: input.email }, include: { company: true } });
     if (!user || !user.active) {
@@ -176,7 +176,10 @@ export const authRoutes = async (app: FastifyInstance) => {
     const session = await issueSession(app, user);
     await audit(app, { tenantId: user.tenantId, userId: user.id, action: user.twoFactorEnabled ? "login com 2fa" : "login", entity: "user", entityId: user.id, request });
     return session;
-  });
+  };
+
+  app.post("/auth/login", handleLogin);
+  app.post("/login", handleLogin);
 
   app.post("/auth/first-access/start", async (request, reply) => {
     const input = firstAccessStartSchema.parse(request.body);
