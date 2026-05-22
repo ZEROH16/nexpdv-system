@@ -20,6 +20,13 @@ export const buildApp = async () => {
 
   await app.register(cors, {
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+    exposedHeaders: ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"],
+    maxAge: 86400,
+    optionsSuccessStatus: 204,
+    strictPreflight: false,
+    preflight: true,
     origin: (origin, callback) => {
       if (!origin) {
         callback(null, true);

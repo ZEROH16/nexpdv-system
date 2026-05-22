@@ -48,9 +48,11 @@ if (isProduction && isWeakSecret(refreshSecret)) {
 
 const splitOrigins = (value?: string) =>
   (value ?? "")
-    .split(",")
+    .split(/[,\s]+/)
     .map((origin) => origin.trim())
     .filter(Boolean);
+
+const productionAdminOrigins = ["https://nexpdvadmin-production.up.railway.app"];
 
 const devOrigins = [
   "http://localhost:5174",
@@ -63,6 +65,7 @@ const configuredOrigins = [
   ...splitOrigins(parsed.CORS_ORIGIN),
   ...splitOrigins(parsed.ADMIN_APP_URL),
   ...splitOrigins(parsed.ADMIN_PANEL_URL),
+  ...(isProduction ? productionAdminOrigins : []),
   ...(!isProduction ? devOrigins : [])
 ].filter((origin) => origin !== "*");
 
