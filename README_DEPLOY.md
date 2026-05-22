@@ -28,7 +28,7 @@ UPDATE_MANDATORY=false
 
 O Railway injeta `PORT`; a API usa `process.env.PORT` em producao e `API_PORT` apenas como fallback de desenvolvimento.
 
-No servico da API, configure os comandos do Railway assim. O build nao roda `npm ci` dentro do `buildCommand`, porque o Nixpacks ja instala as dependencias antes do build:
+No servico da API, configure os comandos do Railway assim. O build nao reinstala dependencias dentro do `buildCommand`, porque o Nixpacks ja executa a fase de install antes do build. O `nixpacks.toml` do repositorio fixa essa fase em `npm install --include=dev`, evitando limpeza de cache travado em `/app/node_modules/.cache`.
 
 ```bash
 # Build
