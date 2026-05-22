@@ -49,8 +49,14 @@ export const SalesHistory = () => {
   };
 
   const reprint = async (saleId: string) => {
-    const html = await desktopApi.sales.receipt(saleId);
-    await desktopApi.receipt.print(html);
+    try {
+      const sale = data?.find((item) => item.id === saleId);
+      const html = await desktopApi.sales.receipt(saleId);
+      await desktopApi.receipt.print(html, { saleId, saleNumber: sale?.number, reason: "reprint" });
+      setMessage("Comprovante enviado para reimpressao.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Nao foi possivel reimprimir o comprovante.");
+    }
   };
 
   const removeCancelled = async () => {

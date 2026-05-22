@@ -1,4 +1,4 @@
-import { Banknote, Lock, MinusCircle, PlusCircle, Wallet } from "lucide-react";
+import { AlertTriangle, Banknote, CheckCircle2, History, Lock, MinusCircle, PlusCircle, Wallet } from "lucide-react";
 import { useState } from "react";
 import { formatCurrency, formatDateTime } from "@nexpdv/shared";
 import { Button } from "@/components/Button";
@@ -27,6 +27,10 @@ export const CashRegisterPage = () => {
   const cashRegister = summary?.cashRegister;
   const outputTotal = (summary?.expenseTotal ?? 0) + (summary?.withdrawalTotal ?? 0);
   const difference = countedAmount - (summary?.expectedAmount ?? 0);
+  const hasDifference = Math.abs(difference) >= 0.01;
+  const differenceTone = !hasDifference ? "text-emerald-700 dark:text-emerald-300" : difference > 0 ? "text-amber-700 dark:text-amber-300" : "text-red-700 dark:text-red-300";
+  const differenceBg = !hasDifference ? "bg-emerald-50 dark:bg-emerald-950" : difference > 0 ? "bg-amber-50 dark:bg-amber-950" : "bg-red-50 dark:bg-red-950";
+  const recentMovements = summary?.recentMovements ?? [];
 
   const open = async () => {
     try {
@@ -191,32 +195,78 @@ export const CashRegisterPage = () => {
       ) : null}
 
       {closingOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-8">
-          <div className="w-full max-w-xl rounded-lg bg-white p-6 shadow-2xl dark:bg-slate-950">
-            <h2 className="text-xl font-black">Fechamento do caixa</h2>
-            <div className="mt-5 grid grid-cols-2 gap-4">
-              <div className="rounded-lg bg-slate-50 p-4 dark:bg-slate-900">
-                <div className="text-xs font-bold uppercase text-slate-500">Valor esperado</div>
-                <div className="mt-1 text-2xl font-black">{formatCurrency(summary?.expectedAmount ?? 0)}</div>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-4 dark:bg-slate-900">
-                <div className="text-xs font-bold uppercase text-slate-500">Diferenca</div>
-                <div className={`mt-1 text-2xl font-black ${difference === 0 ? "text-mint" : "text-amber-600"}`}>{formatCurrency(difference)}</div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4">
+          <div className="max-h-[92vh] w-full max-w-lg overflow-auto rounded-lg bg-white shadow-2xl dark:bg-slate-950">
+            <div className="border-b border-slate-200 p-5 dark:border-slate-800">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-black">Fechar caixa</h2>
+                  <p className="mt-1 text-sm text-slate-500">{cashRegister.operatorName} - aberto desde {formatDateTime(cashRegister.openedAt)}</p>
+                </div>
+                <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${differenceBg} ${differenceTone}`}>
+                  {hasDifference ? <AlertTriangle size={22} /> : <CheckCircle2 size={22} />}
+                </div>
               </div>
             </div>
-            <label className="mt-5 block text-sm font-semibold">
-              Valor contado
-              <input className="field mt-2 h-12 w-full text-lg font-bold" type="number" min={0} value={countedAmount} onChange={(event) => setCountedAmount(Number(event.target.value))} autoFocus />
-            </label>
-            <label className="mt-4 block text-sm font-semibold">
-              Observacoes
-              <textarea className="field mt-2 h-24 w-full py-2" value={closingNotes} onChange={(event) => setClosingNotes(event.target.value)} />
-            </label>
-            <div className="mt-6 flex justify-end gap-3">
+
+            <div className="grid gap-4 p-5">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-900">
+                  <div className="text-xs font-bold uppercase text-slate-500">Valor esperado</div>
+                  <div className="mt-1 text-xl font-black">{formatCurrency(summary?.expectedAmount ?? 0)}</div>
+                </div>
+                <div className={`rounded-lg p-3 ${differenceBg}`}>
+                  <div className="text-xs font-bold uppercase text-slate-500">Diferenca</div>
+                  <div className={`mt-1 text-2xl font-black ${differenceTone}`}>{formatCurrency(difference)}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 text-sm">
+                <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-900">
+                  <span className="text-slate-500">Vendido</span>
+                  <strong className="mt-1 block">{formatCurrency(summary?.salesTotal ?? 0)}</strong>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-900">
+                  <span className="text-slate-500">Entradas</span>
+                  <strong className="mt-1 block">{formatCurrency(summary?.incomeTotal ?? 0)}</strong>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-900">
+                  <span className="text-slate-500">Saidas</span>
+                  <strong className="mt-1 block">{formatCurrency(outputTotal)}</strong>
+                </div>
+              </div>
+
+              <label className="block text-sm font-semibold">
+                Valor contado
+                <input className="field mt-2 h-12 w-full text-lg font-black" type="number" min={0} value={countedAmount} onChange={(event) => setCountedAmount(Number(event.target.value))} autoFocus />
+              </label>
+
+              <section className="rounded-lg border border-slate-200 p-3 dark:border-slate-800">
+                <div className="flex items-center gap-2 text-sm font-black">
+                  <History size={16} />
+                  Historico recente
+                </div>
+                <div className="mt-3 space-y-2">
+                  {recentMovements.length ? recentMovements.map((item) => (
+                    <div key={item.id} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="truncate text-slate-500">{item.description}</span>
+                      <strong className={item.amount < 0 ? "text-red-600" : "text-emerald-600"}>{formatCurrency(item.amount)}</strong>
+                    </div>
+                  )) : <div className="text-sm text-slate-500">Nenhuma movimentacao registrada.</div>}
+                </div>
+              </section>
+
+              <label className="block text-sm font-semibold">
+                Observacoes
+                <textarea className="field mt-2 h-20 w-full py-2" value={closingNotes} onChange={(event) => setClosingNotes(event.target.value)} />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-[1fr_1.3fr] gap-3 border-t border-slate-200 p-5 dark:border-slate-800">
               <Button variant="ghost" onClick={() => setClosingOpen(false)}>
                 Cancelar
               </Button>
-              <Button variant="danger" onClick={close}>
+              <Button className="h-12 text-base" variant="danger" onClick={close}>
                 Confirmar fechamento
               </Button>
             </div>
