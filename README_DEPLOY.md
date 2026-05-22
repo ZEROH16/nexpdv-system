@@ -28,6 +28,12 @@ UPDATE_MANDATORY=false
 
 O Railway injeta `PORT`; a API usa `process.env.PORT` em producao e `API_PORT` apenas como fallback de desenvolvimento.
 
+O build da API no Railway usa o script raiz abaixo e nao roda `npm ci` dentro do `buildCommand`, porque o Nixpacks ja instala as dependencias antes do build:
+
+```bash
+npm run railway:api
+```
+
 ## 2. Banco PostgreSQL
 
 As migrations PostgreSQL ficam em `apps/api/prisma/postgres`.
