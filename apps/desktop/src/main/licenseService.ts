@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { License, LicenseActivationInput, LicenseCheckResult, LicenseFeature, LicenseFeatures, LicensePlan, LicenseStatus } from "@nexpdv/shared";
+import type { BuiltInLicensePlan, License, LicenseActivationInput, LicenseCheckResult, LicenseFeature, LicenseFeatures, LicensePlan, LicenseStatus } from "@nexpdv/shared";
 
 const LOCAL_LICENSE_SECRET = "nexpdv-local-license-store-v1";
 const LIFETIME_VALID_UNTIL = "2099-12-31T23:59:59.000Z";
@@ -24,12 +24,12 @@ export interface LocalLicenseRecord extends License {
 
 export interface OnlineLicenseActivation {
   id?: string;
-  key: string;
-  plan: LicensePlan;
-  status: LicenseStatus;
-  validUntil: string;
+  key?: string;
+  plan?: LicensePlan;
+  status?: LicenseStatus;
+  validUntil?: string;
   demoMode?: boolean;
-  features: LicenseFeatures;
+  features?: Partial<LicenseFeatures>;
   ownerEmail?: string;
   establishmentName?: string;
   activatedAt?: string;
@@ -44,7 +44,7 @@ export const disabledFeatures = (): LicenseFeatures => ({
   intelligence: false
 });
 
-export const licensePlans: Record<LicensePlan, { label: string; features: LicenseFeatures }> = {
+export const licensePlans: Record<BuiltInLicensePlan, { label: string; features: LicenseFeatures }> = {
   OFFLINE: {
     label: "Offline",
     features: disabledFeatures()
@@ -69,7 +69,7 @@ export const licensePlans: Record<LicensePlan, { label: string; features: Licens
   }
 };
 
-const activationKeys: Record<string, { plan: LicensePlan; demoMode: boolean; validUntil: string }> = {
+const activationKeys: Record<string, { plan: BuiltInLicensePlan; demoMode: boolean; validUntil: string }> = {
   "NEXPDV-2026": { plan: "OFFLINE", demoMode: false, validUntil: LIFETIME_VALID_UNTIL },
   "NEXPDV-OFFLINE-2026": { plan: "OFFLINE", demoMode: false, validUntil: LIFETIME_VALID_UNTIL },
   "NEXPDV-CLOUD-2026": { plan: "CLOUD", demoMode: false, validUntil: LIFETIME_VALID_UNTIL },
@@ -82,11 +82,17 @@ const validEmail = (email: string): boolean => /^\S+@\S+\.\S+$/.test(email.trim(
 
 export const isLocalActivationKey = (key: string): boolean => Boolean(activationKeys[normalizeKey(key)]);
 
-export const planForKey = (key: string): LicensePlan | undefined => activationKeys[normalizeKey(key)]?.plan;
+export const planForKey = (key: string): BuiltInLicensePlan | undefined => activationKeys[normalizeKey(key)]?.plan;
 
-export const getPlanFeatures = (plan: LicensePlan): LicenseFeatures => ({ ...licensePlans[plan].features });
+const isBuiltInLicensePlan = (plan?: LicensePlan | "NONE"): plan is BuiltInLicensePlan =>
+  Boolean(plan && plan !== "NONE" && Object.prototype.hasOwnProperty.call(licensePlans, plan));
 
-export const getPlanLabel = (plan: LicensePlan | "NONE"): string => (plan === "NONE" ? "Nao ativado" : licensePlans[plan].label);
+export const getPlanFeatures = (plan?: LicensePlan | "NONE"): LicenseFeatures => ({ ...(isBuiltInLicensePlan(plan) ? licensePlans[plan]?.features : disabledFeatures()) });
+
+export const getPlanLabel = (plan?: LicensePlan | "NONE"): string => {
+  if (!plan || plan === "NONE") return "Nao ativado";
+  return licensePlans[plan as BuiltInLicensePlan]?.label ?? String(plan);
+};
 
 export const serializeFeatures = (features: LicenseFeatures): string => JSON.stringify(features);
 
@@ -106,7 +112,7 @@ const parseFeatures = (value: unknown): LicenseFeatures | undefined => {
   }
 };
 
-const deriveLegacyPlan = (license: Partial<License>): LicensePlan => {
+const deriveLegacyPlan = (license: Partial<License>): BuiltInLicensePlan => {
   const keyPlan = license.key ? planForKey(license.key) : undefined;
   if (keyPlan) return keyPlan;
   if (license.pixEnabled || license.fiscalEnabled || license.intelligenceEnabled) return "PRO";
@@ -137,7 +143,7 @@ export const verifyLicenseSeal = (license: LocalLicenseRecord): boolean => {
 
 export const normalizeStoredLicense = (license: (License & { featuresJson?: string }) | undefined): LocalLicenseRecord | undefined => {
   if (!license) return undefined;
-  const plan = (license.plan as LicensePlan | undefined) ?? deriveLegacyPlan(license);
+  const plan = license.plan ?? deriveLegacyPlan(license);
   const features = parseFeatures(license.featuresJson) ?? license.features ?? getPlanFeatures(plan);
   const activatedAt = license.activatedAt || new Date().toISOString();
   const issuedAt = license.issuedAt || activatedAt;
@@ -219,6 +225,9 @@ export const createOnlineLicenseActivation = (
   timestamp = new Date().toISOString()
 ): LocalLicenseRecord => {
   if (!validEmail(input.ownerEmail)) throw new Error("Informe um email de dono valido.");
+  const plan = online.plan || "CLOUD";
+  const status = online.status || "active";
+  const validUntil = online.validUntil || LIFETIME_VALID_UNTIL;
   const features = {
     ...disabledFeatures(),
     ...online.features
@@ -226,10 +235,10 @@ export const createOnlineLicenseActivation = (
   const unsigned: Omit<LocalLicenseRecord, "signature"> = {
     id: online.id || "lic_online",
     companyId,
-    key: normalizeKey(online.key),
-    plan: online.plan,
-    status: online.status,
-    validUntil: online.validUntil,
+    key: normalizeKey(online.key || input.licenseKey),
+    plan,
+    status,
+    validUntil,
     demoMode: Boolean(online.demoMode),
     features,
     cloudEnabled: features.cloud,

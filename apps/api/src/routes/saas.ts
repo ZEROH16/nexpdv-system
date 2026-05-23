@@ -299,6 +299,7 @@ export const saasRoutes = async (app: FastifyInstance) => {
         id: updatedLicense.id,
         key: updatedLicense.key,
         plan: updatedLicense.planCode,
+        planLabel: updatedLicense.plan?.name ?? updatedLicense.planCode,
         status: updatedLicense.status,
         validUntil: updatedLicense.validUntil.toISOString(),
         offlineGraceUntil: updatedLicense.offlineGraceUntil?.toISOString(),

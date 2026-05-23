@@ -15,11 +15,12 @@ interface ActivationResponse {
   license: {
     id: string;
     key: string;
-    plan: LicensePlan;
-    status: LicenseStatus;
-    validUntil: string;
+    plan?: LicensePlan;
+    planLabel?: string;
+    status?: LicenseStatus;
+    validUntil?: string;
     demoMode?: boolean;
-    features: LicenseFeatures;
+    features?: Partial<LicenseFeatures>;
     activatedAt?: string;
     lastValidatedAt?: string;
     validationMode?: "online";
