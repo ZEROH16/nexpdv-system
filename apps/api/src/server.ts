@@ -1,11 +1,23 @@
 import { buildApp } from "./app.js";
 import { config } from "./config.js";
+import { bootstrapAutomaticAdminIfNeeded } from "./services/automaticAdminBootstrap.js";
 
 const port = config.API_PORT;
 const host = config.API_HOST;
 const app = await buildApp();
 
 try {
+  const adminBootstrap = await bootstrapAutomaticAdminIfNeeded(app.prisma);
+  app.log.info(
+    {
+      created: adminBootstrap.created,
+      email: adminBootstrap.user.email,
+      role: adminBootstrap.user.role,
+      platformRole: adminBootstrap.user.platformRole
+    },
+    adminBootstrap.created ? "automatic admin bootstrap created default admin" : "automatic admin bootstrap skipped"
+  );
+
   app.log.info(
     {
       port,

@@ -4,7 +4,7 @@ export const adminRoutes = async (app: FastifyInstance) => {
   app.addHook("preHandler", app.authenticate);
   app.addHook("preHandler", async (request, reply) => {
     const user = request.user as any;
-    if (!["owner", "admin"].includes(user.role)) {
+    if (!["owner", "admin"].includes(String(user.role ?? "").toLowerCase())) {
       return reply.code(403).send({ message: "Acesso administrativo restrito." });
     }
   });

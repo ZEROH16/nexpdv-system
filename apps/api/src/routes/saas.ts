@@ -39,7 +39,13 @@ const compareVersions = (left: string, right: string): number => {
 };
 
 const userFromRequest = (request: FastifyRequest) => request.user as { sub?: string; role?: string; platformRole?: string; tenantId?: string };
-const isSuperAdmin = (request: FastifyRequest) => userFromRequest(request).platformRole === "super_admin";
+const normalizeRole = (value?: string) => value?.toLowerCase();
+const superAdminPlatformRoleValues = ["super_admin", "OWNER", "owner"];
+const isSuperAdminRole = (value?: string) => ["super_admin", "owner"].includes(normalizeRole(value) ?? "");
+const isAdminRole = (value?: string) => ["owner", "admin"].includes(normalizeRole(value) ?? "");
+const isAdminPlatformRole = (value?: string) => ["super_admin", "owner", "admin", "suporte", "financeiro", "comercial", "leitura", "support"].includes(normalizeRole(value) ?? "");
+const requiresTwoFactorSetup = (value?: string) => ["super_admin", "admin"].includes(normalizeRole(value) ?? "");
+const isSuperAdmin = (request: FastifyRequest) => isSuperAdminRole(userFromRequest(request).platformRole);
 const forbiddenIfNotSuperAdmin = (request: FastifyRequest, reply: any) => {
   if (isSuperAdmin(request)) return false;
   reply.code(403).send({ code: "SUPER_ADMIN_REQUIRED", message: "Acao restrita ao super_admin.", details: "Inative ou bloqueie o registro em vez de excluir definitivamente." });
@@ -66,13 +72,13 @@ const backupLevel = (lastBackupAt?: Date | null) => {
 
 const adminGuard = async (request: FastifyRequest, reply: any) => {
   const user = request.user as { sub?: string; role?: string; platformRole?: string };
-  if (!["owner", "admin"].includes(user.role ?? "") && !["super_admin", "admin", "suporte", "financeiro", "comercial", "leitura", "support"].includes(user.platformRole ?? "")) {
+  if (!isAdminRole(user.role) && !isAdminPlatformRole(user.platformRole)) {
     return reply.code(403).send({ message: "Acesso SaaS restrito." });
   }
   if (user.sub) {
     const current = await request.server.prisma.user.findUnique({ where: { id: user.sub }, select: { twoFactorEnabled: true, firstAccessRequired: true } });
     if (current?.firstAccessRequired) return reply.code(403).send({ message: "Conclua o primeiro acesso antes de acessar o painel admin.", firstAccessRequired: true });
-    if (["super_admin", "admin"].includes(user.platformRole ?? "") && !current?.twoFactorEnabled) {
+    if (requiresTwoFactorSetup(user.platformRole) && !current?.twoFactorEnabled) {
       return reply.code(403).send({ message: "Configure o 2FA antes de acessar o painel admin.", requiresTwoFactorSetup: true });
     }
   }
@@ -1000,8 +1006,8 @@ export const saasRoutes = async (app: FastifyInstance) => {
       const current = userFromRequest(request);
       const target = await app.prisma.user.findUnique({ where: { id: params.id }, include: { _count: { select: { sales: true, auditLogs: true } } } });
       if (!target) return reply.code(404).send({ message: "Usuario SaaS nao encontrado." });
-      if (target.id === current.sub && target.platformRole === "super_admin") {
-        const activeSuperAdmins = await app.prisma.user.count({ where: { platformRole: "super_admin", active: true } });
+      if (target.id === current.sub && isSuperAdminRole(target.platformRole)) {
+        const activeSuperAdmins = await app.prisma.user.count({ where: { platformRole: { in: superAdminPlatformRoleValues }, active: true } });
         if (activeSuperAdmins <= 1) return reply.code(409).send({ message: "Nao e possivel excluir o unico super_admin ativo logado." });
       }
       if (target._count.sales) {
@@ -1051,8 +1057,8 @@ export const saasRoutes = async (app: FastifyInstance) => {
       const current = userFromRequest(request);
       const target = await app.prisma.user.findUnique({ where: { id: params.id }, include: { _count: { select: { sales: true, auditLogs: true } } } });
       if (!target) return reply.code(404).send({ message: "Usuario SaaS nao encontrado." });
-      if (target.id === current.sub && target.platformRole === "super_admin") {
-        const activeSuperAdmins = await app.prisma.user.count({ where: { platformRole: "super_admin", active: true } });
+      if (target.id === current.sub && isSuperAdminRole(target.platformRole)) {
+        const activeSuperAdmins = await app.prisma.user.count({ where: { platformRole: { in: superAdminPlatformRoleValues }, active: true } });
         if (activeSuperAdmins <= 1) return reply.code(409).send({ message: "Nao e possivel excluir o unico super_admin ativo logado." });
       }
       if (target._count.sales) return reply.code(409).send({ message: "Usuario possui vendas vinculadas. Inative em vez de excluir.", counts: target._count });
