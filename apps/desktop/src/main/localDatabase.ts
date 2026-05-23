@@ -30,9 +30,9 @@ import {
   type SaleItem,
   type SyncQueueItem
 } from "@nexpdv/shared";
-import { activateLicenseOnline } from "./cloudLicenseService";
+import { activateLicenseOnline, CloudLicenseUnavailableError, validateLicenseOnline, type RemoteLicenseValidation } from "./cloudLicenseService";
 import { FiscalService } from "./fiscalService";
-import { assertLicensedModule, checkStoredLicense, createLocalLicenseActivation, isLocalActivationKey, normalizeStoredLicense, serializeFeatures, type LocalLicenseRecord } from "./licenseService";
+import { assertLicensedModule, checkStoredLicense, createLocalLicenseActivation, createOnlineLicenseActivation, isLocalActivationKey, maskLicenseKey, normalizeStoredLicense, serializeFeatures, signLicense, type LocalLicenseRecord } from "./licenseService";
 import { adminRoleCodes, hashPassword, hashPin, legacyHashPassword, managerRoleCodes, normalizeLogin, PERMISSIONS, permissionLabels, type PermissionKey } from "./permissionService";
 import { PixService } from "./pixService";
 import { roleSeeds } from "./roleService";
@@ -169,6 +169,17 @@ export interface SystemState {
     mobileEnabled?: boolean;
     intelligenceEnabled?: boolean;
   };
+  licenseGuard: LicenseGuardState;
+}
+
+export interface LicenseGuardState {
+  allowed: boolean;
+  status: "active" | "blocked" | "expired" | "missing" | "invalid" | "offline_grace" | "offline_expired" | "device_unauthorized";
+  connection: "online" | "offline" | "not_configured" | "local";
+  message: string;
+  checkedAt?: string;
+  lastOnlineValidatedAt?: string;
+  offlineGraceEndsAt?: string;
 }
 
 export interface UserAccount {
@@ -337,6 +348,43 @@ export interface AuditEntry {
 const now = () => new Date().toISOString();
 const uid = (prefix: string) => `${prefix}_${randomUUID()}`;
 const toBoolean = (value: unknown): boolean => value === true || value === 1 || value === "1" || value === "true";
+const numberFromEnv = (value: string | undefined, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+const licenseOfflineGraceHours = () => numberFromEnv(process.env.NEXPDV_LICENSE_OFFLINE_GRACE_HOURS ?? process.env.LICENSE_OFFLINE_GRACE_HOURS, 72);
+export const licenseValidationIntervalMs = () =>
+  numberFromEnv(process.env.NEXPDV_LICENSE_CHECK_INTERVAL_MINUTES ?? process.env.LICENSE_CHECK_INTERVAL_MINUTES, 15) * 60_000;
+const addHoursIso = (iso: string | undefined, hours: number): string | undefined => {
+  if (!iso) return undefined;
+  const timestamp = new Date(iso).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp + hours * 60 * 60 * 1000).toISOString() : undefined;
+};
+const remoteBlockingStates = new Set([
+  "blocked",
+  "expired",
+  "missing",
+  "invalid",
+  "device_unauthorized",
+  "cancelled",
+  "inactive",
+  "LICENSE_BLOCKED",
+  "LICENSE_EXPIRED",
+  "LICENSE_NOT_FOUND",
+  "LICENSE_INVALID",
+  "DEVICE_NOT_AUTHORIZED",
+  "COMPANY_MISMATCH",
+  "TENANT_MISMATCH"
+]);
+const normalizeRemoteStatus = (status?: string) => {
+  const value = (status ?? "").toLowerCase();
+  if (value === "device_not_authorized" || value === "device_unauthorized") return "device_unauthorized";
+  if (value === "license_not_found" || value === "not_found" || value === "missing") return "missing";
+  if (value === "license_blocked" || value === "blocked" || value === "cancelled" || value === "inactive") return "blocked";
+  if (value === "license_expired" || value === "expired") return "expired";
+  if (value === "license_active" || value === "active" || value === "trial") return "active";
+  return value ? "invalid" : "invalid";
+};
 
 const normalizeValue = (value: unknown) => {
   if (value === undefined) return null;
@@ -1382,11 +1430,143 @@ export class LocalDatabase {
     } as License & { featuresJson?: string });
   }
 
+  private getStoredLicenseGuard(license: LocalLicenseRecord | undefined, connection: LicenseGuardState["connection"] = license?.validationMode === "online" ? "offline" : "local", overrideMessage?: string): LicenseGuardState {
+    const checkedAt = now();
+    if (!license) {
+      return {
+        allowed: false,
+        status: "missing",
+        connection,
+        checkedAt,
+        message: overrideMessage ?? "Licenca nao ativada."
+      };
+    }
+
+    const lastOnlineValidatedAt = this.getSetting("license_last_online_validation_at") || (license.validationMode === "online" ? license.lastValidatedAt : undefined);
+    const offlineGraceEndsAt = addHoursIso(lastOnlineValidatedAt, licenseOfflineGraceHours());
+    const remoteState = this.getSetting("license_remote_state");
+    const normalizedRemoteState = normalizeRemoteStatus(remoteState);
+    const licenseCheck = checkStoredLicense(license);
+
+    if (remoteState && remoteBlockingStates.has(remoteState)) {
+      return {
+        allowed: false,
+        status: normalizedRemoteState,
+        connection,
+        checkedAt,
+        lastOnlineValidatedAt,
+        offlineGraceEndsAt,
+        message: overrideMessage ?? "Licenca bloqueada ou invalida. Entre em contato com o suporte NexPDV."
+      };
+    }
+
+    if (!licenseCheck.valid) {
+      return {
+        allowed: false,
+        status: normalizeRemoteStatus(String(licenseCheck.status)),
+        connection,
+        checkedAt,
+        lastOnlineValidatedAt,
+        offlineGraceEndsAt,
+        message: overrideMessage ?? "Licenca bloqueada ou invalida. Entre em contato com o suporte NexPDV."
+      };
+    }
+
+    if (license.validationMode === "online" && offlineGraceEndsAt && new Date(offlineGraceEndsAt).getTime() <= Date.now()) {
+      return {
+        allowed: false,
+        status: "offline_expired",
+        connection: "offline",
+        checkedAt,
+        lastOnlineValidatedAt,
+        offlineGraceEndsAt,
+        message: "Nao foi possivel validar sua licenca. Conecte-se a internet para continuar."
+      };
+    }
+
+    return {
+      allowed: true,
+      status: license.validationMode === "online" && connection === "offline" ? "offline_grace" : "active",
+      connection,
+      checkedAt,
+      lastOnlineValidatedAt,
+      offlineGraceEndsAt,
+      message: overrideMessage ?? (connection === "offline" ? "Licenca valida em janela offline." : "Licenca ativa.")
+    };
+  }
+
+  private saveRemoteBlockedLicense(license: LocalLicenseRecord, validation: RemoteLicenseValidation): LocalLicenseRecord {
+    const timestamp = validation.serverTime || now();
+    const status = normalizeRemoteStatus(validation.status) === "expired" ? "expired" : "blocked";
+    this.db.prepare("UPDATE sessions SET locked = 1 WHERE company_id = ? AND active = 1").run(COMPANY_ID);
+    const unsignedBase = { ...license } as Omit<LocalLicenseRecord, "signature"> & { signature?: string };
+    delete unsignedBase.signature;
+    const unsigned: Omit<LocalLicenseRecord, "signature"> = {
+      ...unsignedBase,
+      status,
+      lastValidatedAt: timestamp,
+      validationMode: "online"
+    };
+    const blocked = { ...unsigned, signature: signLicense(unsigned) };
+    this.saveLicenseRecord(blocked);
+    return blocked;
+  }
+
+  async validateRemoteLicense(force = false): Promise<LicenseGuardState> {
+    const license = this.getLicense() as LocalLicenseRecord | undefined;
+    if (!license) return this.getStoredLicenseGuard(undefined, "not_configured");
+    if (license.validationMode !== "online" && !force) return this.getStoredLicenseGuard(license, "local");
+
+    this.setSetting("license_last_check_at", now());
+    try {
+      const validation = await validateLicenseOnline(license);
+      const remoteState = validation.valid ? "active" : validation.code ?? validation.status;
+      this.setSetting("license_remote_state", remoteState);
+      this.setSetting("license_last_online_validation_at", validation.serverTime);
+      this.setSetting("license_last_validation_error", "");
+
+      if (validation.valid && validation.license) {
+        const updated = createOnlineLicenseActivation(
+          {
+            ownerEmail: license.ownerEmail ?? "",
+            licenseKey: validation.license.key ?? license.key,
+            companyName: validation.company?.name ?? license.establishmentName
+          },
+          {
+            ...validation.license,
+            key: validation.license.key ?? license.key,
+            status: validation.license.status ?? "active",
+            validUntil: validation.license.validUntil ?? license.validUntil,
+            features: validation.license.features ?? license.features,
+            ownerEmail: validation.company?.ownerEmail ?? license.ownerEmail,
+            establishmentName: validation.company?.name ?? license.establishmentName,
+            lastValidatedAt: validation.serverTime
+          },
+          license.companyId,
+          validation.serverTime
+        );
+        this.saveLicenseRecord(updated);
+        this.recordAudit("licenca validada online", "Sistema", maskLicenseKey(updated.key));
+        return this.getStoredLicenseGuard(updated, "online", validation.message);
+      }
+
+      const blocked = this.saveRemoteBlockedLicense(license, validation);
+      this.recordAudit("licenca bloqueada remotamente", "Sistema", validation.code ?? validation.status);
+      return this.getStoredLicenseGuard(blocked, "online", validation.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Falha ao validar licenca online.";
+      this.setSetting("license_last_validation_error", error instanceof CloudLicenseUnavailableError ? "offline" : "validation_error");
+      this.recordAudit("validacao de licenca offline", "Sistema", message);
+      return this.getStoredLicenseGuard(license, error instanceof CloudLicenseUnavailableError ? "offline" : "not_configured", message);
+    }
+  }
+
   getSystemState(): SystemState {
     const backup = this.getBackupState();
     const license = this.getLicense() as SystemState["license"];
     const licenseCheck = checkStoredLicense(license);
-    const activated = this.getSetting("system_activated") === "true" && licenseCheck.valid;
+    const licenseGuard = this.getStoredLicenseGuard(license as LocalLicenseRecord | undefined, license?.validationMode === "online" ? "offline" : "local");
+    const activated = this.getSetting("system_activated") === "true" && Boolean(license);
     return {
       activated,
       ownerOnboardingRequired: activated && this.isOwnerOnboardingRequired(),
@@ -1405,7 +1585,8 @@ export class LocalDatabase {
       receiptFooterMessage: this.getSetting("receipt_footer_message") || "Obrigado pela preferencia.",
       receiptAutoPrint: this.getSetting("receipt_auto_print") !== "false",
       company: this.getCompany(),
-      license
+      license,
+      licenseGuard
     };
   }
 
@@ -1441,7 +1622,7 @@ export class LocalDatabase {
     this.saveLicenseRecord(license);
     this.setSetting("system_activated", "true");
     this.setSetting("cloud_enabled", String(license.features.cloud));
-    this.recordAudit("licenca ativada", license.ownerEmail, `${activationMode}: ${license.plan}: ${license.key}`);
+    this.recordAudit("licenca ativada", license.ownerEmail, `${activationMode}: ${license.plan}: ${maskLicenseKey(license.key)}`);
     this.recordAudit("sistema ativado", license.ownerEmail, license.establishmentName);
     return this.getSystemState();
   }
@@ -1506,7 +1687,7 @@ export class LocalDatabase {
     this.setSetting("use_permissions", "true");
     this.setSecuritySetting("last_operator_login", username);
     this.recordAuthLog(id, "owner_onboarding", true, "Primeiro acesso do dono criado");
-    this.recordAudit("usuario dono criado", name, `Licenca ${license.key}`);
+    this.recordAudit("usuario dono criado", name, `Licenca ${maskLicenseKey(license.key)}`);
     this.recordAudit("primeiro acesso concluido", name, "activation_onboarding");
     return this.getUserAccountById(id)!;
   }

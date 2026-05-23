@@ -80,6 +80,12 @@ const normalizeKey = (key: string): string => key.trim().toUpperCase();
 
 const validEmail = (email: string): boolean => /^\S+@\S+\.\S+$/.test(email.trim());
 
+export const maskLicenseKey = (key?: string): string => {
+  const normalized = key ? normalizeKey(key) : "";
+  if (!normalized) return "";
+  return normalized.length <= 8 ? "****" : `${normalized.slice(0, 4)}...${normalized.slice(-4)}`;
+};
+
 export const isLocalActivationKey = (key: string): boolean => Boolean(activationKeys[normalizeKey(key)]);
 
 export const planForKey = (key: string): BuiltInLicensePlan | undefined => activationKeys[normalizeKey(key)]?.plan;

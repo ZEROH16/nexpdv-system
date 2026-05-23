@@ -1,13 +1,13 @@
-import { DatabaseBackup, DownloadCloud, HelpCircle, KeyRound, Moon, RefreshCcw, ShieldCheck, Smartphone, WalletCards } from "lucide-react";
+import { Copy, DatabaseBackup, DownloadCloud, HelpCircle, KeyRound, Mail, MessageCircle, Moon, RefreshCcw, ShieldCheck, Smartphone, WalletCards } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Company, FiscalConfig, PixConfig } from "@nexpdv/shared";
 import { Button } from "@/components/Button";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useAsync } from "@/hooks/useAsync";
 import { desktopApi } from "@/services/desktopApi";
-import type { CloudApiStatus, SecuritySettings, UpdateState } from "@/services/desktopApi";
+import type { SecuritySettings, UpdateState } from "@/services/desktopApi";
 
-type SettingsTab = "company" | "license" | "backup" | "pix" | "fiscal" | "security" | "support";
+type SettingsTab = "company" | "license" | "backup" | "pix" | "fiscal" | "security" | "update" | "support";
 
 const tabs: Array<{ id: SettingsTab; label: string }> = [
   { id: "company", label: "Empresa" },
@@ -16,6 +16,7 @@ const tabs: Array<{ id: SettingsTab; label: string }> = [
   { id: "pix", label: "Pix" },
   { id: "fiscal", label: "Fiscal" },
   { id: "security", label: "Seguranca" },
+  { id: "update", label: "Atualizacao" },
   { id: "support", label: "Suporte" }
 ];
 
@@ -99,9 +100,6 @@ export const Settings = () => {
   const [message, setMessage] = useState<string>();
   const [pixTesting, setPixTesting] = useState(false);
   const [updateState, setUpdateState] = useState<UpdateState>();
-  const [cloudApiStatus, setCloudApiStatus] = useState<CloudApiStatus>();
-  const [cloudApiBusy, setCloudApiBusy] = useState(false);
-  const [cloudApiForm, setCloudApiForm] = useState({ apiUrl: "", login: "", password: "", pin: "" });
   const { data: license, refresh: refreshLicense } = useAsync(() => desktopApi.license.check(), []);
   const { data: systemState, refresh: refreshSystem } = useAsync(() => desktopApi.system.state(), []);
   const { data: backupState, refresh: refreshBackup } = useAsync(() => desktopApi.system.backupState(), []);
@@ -171,10 +169,6 @@ export const Settings = () => {
       mounted = false;
       unsubscribe();
     };
-  }, []);
-
-  useEffect(() => {
-    void refreshCloudApiStatus();
   }, []);
 
   const cloudEnabled = Boolean(license?.features?.cloud ?? systemState?.cloudEnabled);
@@ -342,55 +336,26 @@ export const Settings = () => {
     }
   };
 
-  const refreshCloudApiStatus = async () => {
-    try {
-      const status = await desktopApi.system.cloudApiStatus();
-      setCloudApiStatus(status);
-      setCloudApiForm((current) => ({ ...current, apiUrl: current.apiUrl || status.apiUrl || "" }));
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel ler a API Cloud configurada.");
-    }
+  const openWhatsApp = () => {
+    void desktopApi.system.openExternal("https://wa.me/5516992928855");
   };
 
-  const testCloudApi = async () => {
-    setCloudApiBusy(true);
-    try {
-      const status = await desktopApi.system.cloudApiTest(cloudApiForm.apiUrl || undefined);
-      setCloudApiStatus(status);
-      setMessage(status.message);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel testar a API Cloud.");
-    } finally {
-      setCloudApiBusy(false);
-    }
+  const sendSupportEmail = () => {
+    void desktopApi.system.openExternal("mailto:pedropericini@icloud.com?subject=Suporte%20NexPDV");
   };
 
-  const saveCloudApi = async () => {
-    setCloudApiBusy(true);
-    try {
-      const status = await desktopApi.system.cloudApiSave(cloudApiForm);
-      setCloudApiStatus(status);
-      setCloudApiForm((current) => ({ ...current, apiUrl: status.apiUrl || current.apiUrl, password: "", pin: "" }));
-      setMessage("URL da API Cloud salva.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel salvar a API Cloud.");
-    } finally {
-      setCloudApiBusy(false);
-    }
-  };
-
-  const resetCloudApi = async () => {
-    setCloudApiBusy(true);
-    try {
-      const status = await desktopApi.system.cloudApiReset(cloudApiForm);
-      setCloudApiStatus(status);
-      setCloudApiForm((current) => ({ ...current, apiUrl: status.apiUrl || "", password: "", pin: "" }));
-      setMessage("URL padrao da API Cloud restaurada.");
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Nao foi possivel restaurar a API Cloud.");
-    } finally {
-      setCloudApiBusy(false);
-    }
+  const copySystemInfo = async () => {
+    const lines = [
+      "NexPDV Desktop",
+      `Versao: ${systemState?.appVersion ?? updateState?.currentVersion ?? "-"}`,
+      `Licenca: ${license?.status ?? systemState?.licenseGuard.status ?? "-"}`,
+      `Plano: ${license?.planLabel ?? systemState?.license?.plan ?? "-"}`,
+      `Conexao: ${systemState?.licenseGuard.connection === "online" ? "Online" : "Offline"}`,
+      `Ultima validacao: ${systemState?.licenseGuard.lastOnlineValidatedAt ? new Date(systemState.licenseGuard.lastOnlineValidatedAt).toLocaleString("pt-BR") : "-"}`,
+      `Empresa: ${systemState?.company.tradeName ?? systemState?.company.name ?? "-"}`
+    ];
+    await desktopApi.system.copyText(lines.join("\n"));
+    setMessage("Informacoes do sistema copiadas.");
   };
 
   const resetLocalInstallation = async () => {
@@ -719,81 +684,19 @@ export const Settings = () => {
         </section>
       ) : null}
 
-      {tab === "support" ? (
+      {tab === "update" ? (
         <section className="grid gap-4">
           <div className="panel p-6">
-            <div className="flex items-start gap-4">
-              <HelpCircle size={24} />
-              <div>
-                <h2 className="text-lg font-black">Suporte NexPDV</h2>
-                <p className="mt-2 text-sm text-slate-500">WhatsApp: (00) 00000-0000</p>
-                <p className="text-sm text-slate-500">Email: suporte@nexpdv.com.br</p>
-              </div>
-            </div>
-          </div>
-          <div className="panel p-6">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="flex items-start gap-4">
                 <DownloadCloud size={24} />
                 <div>
-                  <h2 className="text-lg font-black">API Cloud</h2>
-                  <p className="mt-2 text-sm text-slate-500">{cloudApiStatus?.message ?? "Carregando configuracao da API Cloud."}</p>
-                  <p className="mt-1 break-all text-xs text-slate-500">
-                    Atual: {cloudApiStatus?.apiUrl ?? "nao configurada"} - origem {cloudApiStatus?.sourceLabel ?? "-"}
-                  </p>
-                </div>
-              </div>
-              <StatusBadge tone={cloudApiStatus?.lastError ? "red" : cloudApiStatus?.productionReady ? "green" : "slate"}>
-                {cloudApiStatus?.lastError ? "Atencao" : cloudApiStatus?.productionReady ? "Producao" : "Dev"}
-              </StatusBadge>
-            </div>
-            <div className="mt-5 grid grid-cols-4 gap-3">
-              <label className="col-span-4 text-sm font-semibold">
-                URL da API
-                <input
-                  className="field mt-1 w-full"
-                  placeholder="https://sua-api-nexpdv.up.railway.app"
-                  value={cloudApiForm.apiUrl}
-                  onChange={(event) => setCloudApiForm({ ...cloudApiForm, apiUrl: event.target.value })}
-                />
-              </label>
-              <label className="text-sm font-semibold">
-                Login admin
-                <input className="field mt-1 w-full" value={cloudApiForm.login} onChange={(event) => setCloudApiForm({ ...cloudApiForm, login: event.target.value })} />
-              </label>
-              <label className="text-sm font-semibold">
-                Senha
-                <input className="field mt-1 w-full" type="password" value={cloudApiForm.password} onChange={(event) => setCloudApiForm({ ...cloudApiForm, password: event.target.value })} />
-              </label>
-              <label className="text-sm font-semibold">
-                PIN
-                <input className="field mt-1 w-full" value={cloudApiForm.pin} onChange={(event) => setCloudApiForm({ ...cloudApiForm, pin: event.target.value })} />
-              </label>
-              <div className="flex items-end gap-2">
-                <Button variant="secondary" disabled={cloudApiBusy} onClick={testCloudApi}>Testar</Button>
-                <Button disabled={cloudApiBusy} onClick={saveCloudApi}>Salvar</Button>
-              </div>
-            </div>
-            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
-              <span className="break-all">Config Windows: {cloudApiStatus?.programDataPath ?? "C:\\ProgramData\\NexPDV\\config.json"}</span>
-              <Button variant="secondary" disabled={cloudApiBusy} onClick={resetCloudApi}>Restaurar URL padrao</Button>
-            </div>
-            {cloudApiStatus?.health ? (
-              <div className="mt-3 rounded-lg bg-slate-50 p-3 text-xs text-slate-500 dark:bg-slate-950">
-                Health: {cloudApiStatus.health.status ?? "-"} - banco {cloudApiStatus.health.database ?? "-"} - versao {cloudApiStatus.health.version ?? "-"}
-              </div>
-            ) : null}
-          </div>
-          <div className="panel p-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-start gap-4">
-                <DownloadCloud size={24} />
-                <div>
-                  <h2 className="text-lg font-black">Atualizacoes do aplicativo</h2>
+                  <h2 className="text-lg font-black">Atualizacao do aplicativo</h2>
                   <p className="mt-2 text-sm text-slate-500">
                     Canal {updateState?.channel ?? "stable"} - versao atual {updateState?.currentVersion ?? systemState?.appVersion ?? "0.1.0"}
                   </p>
                   <p className="mt-1 text-sm text-slate-500">{updateState?.message ?? "Verificacao pronta."}</p>
+                  {updateState?.version ? <p className="mt-1 text-sm text-slate-500">Ultima versao disponivel: {updateState.version}</p> : null}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -801,6 +704,56 @@ export const Settings = () => {
                 <Button variant="secondary" onClick={checkUpdates}>
                   <RefreshCcw size={16} />Verificar
                 </Button>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {tab === "support" ? (
+        <section className="grid gap-4">
+          <div className="panel p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <HelpCircle size={24} />
+                <div>
+                  <h2 className="text-lg font-black">Suporte NexPDV</h2>
+                  <p className="mt-2 text-sm text-slate-500">WhatsApp: (16) 99292-8855</p>
+                  <p className="text-sm text-slate-500">Email: pedropericini@icloud.com</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button variant="secondary" onClick={openWhatsApp}><MessageCircle size={16} />Abrir WhatsApp</Button>
+                <Button variant="secondary" onClick={sendSupportEmail}><Mail size={16} />Enviar email</Button>
+                <Button onClick={() => void copySystemInfo()}><Copy size={16} />Copiar informacoes</Button>
+              </div>
+            </div>
+          </div>
+          <div className="panel p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="text-lg font-black">Status do sistema</h2>
+                <p className="mt-2 text-sm text-slate-500">Versao {systemState?.appVersion ?? updateState?.currentVersion ?? "0.1.0"}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <StatusBadge tone={systemState?.licenseGuard.connection === "online" ? "green" : "slate"}>
+                  {systemState?.licenseGuard.connection === "online" ? "Online" : "Offline"}
+                </StatusBadge>
+                <StatusBadge tone={license?.valid && systemState?.licenseGuard.allowed ? "green" : "red"}>
+                  {systemState?.licenseGuard.status ?? license?.status ?? "missing"}
+                </StatusBadge>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 text-sm md:grid-cols-2">
+              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                <div className="font-bold">Licenca</div>
+                <div className="mt-1 text-slate-500">{license?.planLabel ?? systemState?.license?.plan ?? "Nao ativada"}</div>
+              </div>
+              <div className="rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                <div className="font-bold">Ultima validacao</div>
+                <div className="mt-1 text-slate-500">
+                  {systemState?.licenseGuard.lastOnlineValidatedAt ? new Date(systemState.licenseGuard.lastOnlineValidatedAt).toLocaleString("pt-BR") : "Nao registrada"}
+                </div>
               </div>
             </div>
           </div>

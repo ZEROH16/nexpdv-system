@@ -1,11 +1,11 @@
-import { app, ipcMain } from "electron";
+import { app, clipboard, ipcMain, shell } from "electron";
 import type { LocalDatabase } from "./localDatabase";
 import type { SyncEngine } from "./syncEngine";
 import { assertLicensedModule, checkLocalLicense } from "./licenseService";
 import { listThermalPrinters, openCashDrawer, printReceipt, printTestReceipt, type ReceiptPrintContext } from "./receiptPrinter";
 import { renderQrSvgDataUrl } from "./qrCodeRenderer";
 import { requestLocalResetOnNextStart } from "./devResetLocal";
-import { getCloudApiStatus, resetLocalCloudApiUrl, saveLocalCloudApiUrl, testCloudApiConnection } from "./cloudApiConfig";
+import { getCloudApiStatus, resetLocalCloudApiUrl, saveLocalCloudApiUrl, testCloudApiConnection, type CloudApiStatus } from "./cloudApiConfig";
 
 interface ReceiptPrintRequest {
   html: string;
@@ -24,6 +24,28 @@ const printAuditLabel = (context?: ReceiptPrintContext): string => {
   if (context?.reason === "test") return "teste impressao executado";
   return "comprovante impresso";
 };
+
+const technicalSupportMode = () => Boolean(process.env.VITE_DEV_SERVER_URL) || process.env.NEXPDV_TECH_SUPPORT_MODE === "true";
+
+const redactCloudApiStatus = (status: CloudApiStatus): CloudApiStatus =>
+  technicalSupportMode()
+    ? status
+    : {
+        ...status,
+        apiUrl: undefined,
+        programDataPath: "",
+        localConfigPath: "",
+        sourceLabel: "NexPDV Cloud",
+        message: status.lastError ? "Conexao com a nuvem indisponivel." : "Conexao com a nuvem configurada.",
+        health: status.health
+          ? {
+              status: status.health.status,
+              product: status.health.product,
+              version: status.health.version,
+              time: status.health.time
+            }
+          : undefined
+      };
 
 export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void => {
   ipcMain.handle("dashboard:get", () => db.getDashboard());
@@ -56,6 +78,7 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
     return sync.flush();
   });
   ipcMain.handle("license:check", () => checkLocalLicense(db));
+  ipcMain.handle("license:validate", () => db.validateRemoteLicense(true));
   ipcMain.handle("auth:state", () => db.getAuthState());
   ipcMain.handle("auth:login", (_event, input) => db.login(input));
   ipcMain.handle("auth:logout", (_event, sessionId?: string) => db.logout(sessionId));
@@ -87,9 +110,22 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
   ipcMain.handle("system:backup-state", () => db.getBackupState());
   ipcMain.handle("system:backup-export", () => db.exportLocalBackup());
   ipcMain.handle("system:backup-restore", (_event, filePath: string) => db.restoreLocalBackup(filePath));
-  ipcMain.handle("cloud-api:status", () => getCloudApiStatus());
-  ipcMain.handle("cloud-api:test", (_event, input?: { apiUrl?: string }) => testCloudApiConnection(input?.apiUrl));
+  ipcMain.handle("system:open-external", async (_event, url: string) => {
+    if (!/^(https:\/\/wa\.me\/|mailto:)/i.test(url)) throw new Error("Link externo nao permitido.");
+    await shell.openExternal(url);
+    return { ok: true };
+  });
+  ipcMain.handle("system:copy-text", (_event, text: string) => {
+    clipboard.writeText(text);
+    return { ok: true };
+  });
+  ipcMain.handle("cloud-api:status", () => redactCloudApiStatus(getCloudApiStatus()));
+  ipcMain.handle("cloud-api:test", async (_event, input?: { apiUrl?: string }) => {
+    const status = await testCloudApiConnection(technicalSupportMode() ? input?.apiUrl : undefined);
+    return redactCloudApiStatus(status);
+  });
   ipcMain.handle("cloud-api:save", (_event, input: CloudApiChangeRequest) => {
+    if (!technicalSupportMode()) throw new Error("Configuracao tecnica disponivel apenas no modo suporte.");
     const auth = db.authorizeCredential({
       login: input.login,
       password: input.password,
@@ -103,6 +139,7 @@ export const registerIpcHandlers = (db: LocalDatabase, sync: SyncEngine): void =
     return status;
   });
   ipcMain.handle("cloud-api:reset", (_event, input: CloudApiChangeRequest) => {
+    if (!technicalSupportMode()) throw new Error("Configuracao tecnica disponivel apenas no modo suporte.");
     const auth = db.authorizeCredential({
       login: input.login,
       password: input.password,

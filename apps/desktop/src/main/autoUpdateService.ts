@@ -3,6 +3,7 @@ import { autoUpdater } from "electron-updater";
 
 type UpdateChannel = "stable" | "beta" | "dev";
 type UpdateStatus = "disabled" | "idle" | "checking" | "available" | "not_available" | "downloading" | "downloaded" | "error";
+const DEFAULT_UPDATE_PROVIDER_URL = "https://updates.nexpdv.com.br/desktop/stable";
 
 export interface UpdateState {
   enabled: boolean;
@@ -47,7 +48,7 @@ const compareVersions = (left: string, right: string): number => {
 export const registerAutoUpdate = ({ window, log, audit }: AutoUpdateOptions): UpdateState => {
   const enabled = parseBool(process.env.AUTO_UPDATE_ENABLED, app.isPackaged);
   const channel = updateChannel();
-  const providerUrl = (process.env.UPDATE_PROVIDER_URL || "").trim().replace(/\/$/, "");
+  const providerUrl = (process.env.UPDATE_PROVIDER_URL || (app.isPackaged ? DEFAULT_UPDATE_PROVIDER_URL : "")).trim().replace(/\/$/, "");
   let state: UpdateState = {
     enabled,
     channel,
@@ -136,6 +137,14 @@ export const registerAutoUpdate = ({ window, log, audit }: AutoUpdateOptions): U
     publish({ status: "idle", message: "Atualizacao adiada." });
     return state;
   });
+
+  if (enabled && providerUrl) {
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch((error) => {
+        log("Falha na verificacao inicial de update.", error);
+      });
+    }, 3500);
+  }
 
   return state;
 };

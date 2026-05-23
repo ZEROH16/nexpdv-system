@@ -48,7 +48,11 @@ declare global {
         remindLater: <T>() => Promise<T>;
         onStatus: (callback: (state: unknown) => void) => () => void;
       };
-      license: { check: <T>() => Promise<T> };
+      license: {
+        check: <T>() => Promise<T>;
+        validate: <T>() => Promise<T>;
+        onStatus: (callback: (state: unknown) => void) => () => void;
+      };
       auth: {
         state: <T>() => Promise<T>;
         login: <T>(input: unknown) => Promise<T>;
@@ -83,6 +87,8 @@ declare global {
         backupState: <T>() => Promise<T>;
         backupExport: <T>() => Promise<T>;
         backupRestore: <T>(filePath: string) => Promise<T>;
+        openExternal: <T>(url: string) => Promise<T>;
+        copyText: <T>(text: string) => Promise<T>;
         cloudApiStatus: <T>() => Promise<T>;
         cloudApiTest: <T>(input?: unknown) => Promise<T>;
         cloudApiSave: <T>(input: unknown) => Promise<T>;

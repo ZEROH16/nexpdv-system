@@ -1,7 +1,7 @@
 import { BrowserWindow, app, nativeTheme } from "electron";
 import fs from "node:fs";
 import path from "node:path";
-import { LocalDatabase } from "./localDatabase";
+import { licenseValidationIntervalMs, LocalDatabase } from "./localDatabase";
 import { registerIpcHandlers } from "./ipc";
 import { SyncEngine } from "./syncEngine";
 import { resetLocalDataIfRequested } from "./devResetLocal";
@@ -50,11 +50,26 @@ const getRendererIndexPath = (): string => path.join(getAppRoot(), "dist", "rend
 let mainWindow: BrowserWindow | undefined;
 let splashWindow: BrowserWindow | undefined;
 let syncEngine: SyncEngine | undefined;
+let licenseValidationTimer: ReturnType<typeof setInterval> | undefined;
 
 const ensureFile = (label: string, filePath: string): void => {
   if (!fs.existsSync(filePath)) {
     throw new Error(`${label} nao encontrado: ${filePath}`);
   }
+};
+
+const startLicenseValidationMonitor = (db: LocalDatabase, window: BrowserWindow): void => {
+  if (licenseValidationTimer) clearInterval(licenseValidationTimer);
+  const run = async () => {
+    try {
+      const state = await db.validateRemoteLicense();
+      window.webContents.send("license:status", state);
+    } catch (error) {
+      logMain("Validacao remota de licenca falhou.", error);
+    }
+  };
+  setTimeout(run, 1500);
+  licenseValidationTimer = setInterval(run, licenseValidationIntervalMs());
 };
 
 const createWindow = async (): Promise<void> => {
@@ -138,6 +153,7 @@ const createWindow = async (): Promise<void> => {
   }
 
   syncEngine.start(mainWindow);
+  startLicenseValidationMonitor(db, mainWindow);
   logMain("Sync engine iniciado.");
 };
 
@@ -156,7 +172,10 @@ process.on("unhandledRejection", (reason) => {
   app.quit();
 });
 
-app.on("before-quit", () => syncEngine?.stop());
+app.on("before-quit", () => {
+  if (licenseValidationTimer) clearInterval(licenseValidationTimer);
+  syncEngine?.stop();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

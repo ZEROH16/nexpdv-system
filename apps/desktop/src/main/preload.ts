@@ -57,7 +57,13 @@ contextBridge.exposeInMainWorld("nexpdv", {
     }
   },
   license: {
-    check: () => invoke("license:check")
+    check: () => invoke("license:check"),
+    validate: () => invoke("license:validate"),
+    onStatus: (callback: (state: unknown) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, state: unknown) => callback(state);
+      ipcRenderer.on("license:status", listener);
+      return () => ipcRenderer.removeListener("license:status", listener);
+    }
   },
   auth: {
     state: () => invoke("auth:state"),
@@ -93,6 +99,8 @@ contextBridge.exposeInMainWorld("nexpdv", {
     backupState: () => invoke("system:backup-state"),
     backupExport: () => invoke("system:backup-export"),
     backupRestore: (filePath: string) => invoke("system:backup-restore", filePath),
+    openExternal: (url: string) => invoke("system:open-external", url),
+    copyText: (text: string) => invoke("system:copy-text", text),
     cloudApiStatus: () => invoke("cloud-api:status"),
     cloudApiTest: (input?: unknown) => invoke("cloud-api:test", input),
     cloudApiSave: (input: unknown) => invoke("cloud-api:save", input),

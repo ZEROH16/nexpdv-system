@@ -81,6 +81,16 @@ export interface CloudApiStatus {
   };
 }
 
+export interface LicenseGuardState {
+  allowed: boolean;
+  status: "active" | "blocked" | "expired" | "missing" | "invalid" | "offline_grace" | "offline_expired" | "device_unauthorized";
+  connection: "online" | "offline" | "not_configured" | "local";
+  message: string;
+  checkedAt?: string;
+  lastOnlineValidatedAt?: string;
+  offlineGraceEndsAt?: string;
+}
+
 export interface CashSummary {
   cashRegister?: CashRegister;
   salesTotal: number;
@@ -109,6 +119,7 @@ export interface SystemState {
   receiptFooterMessage: string;
   receiptAutoPrint: boolean;
   company: Partial<Company>;
+  licenseGuard: LicenseGuardState;
   license?: License & {
     cloudEnabled?: boolean;
     fiscalEnabled?: boolean;
@@ -283,7 +294,9 @@ export const desktopApi = {
     onStatus: window.nexpdv.updates.onStatus
   },
   license: {
-    check: () => window.nexpdv.license.check<LicenseCheckResult>()
+    check: () => window.nexpdv.license.check<LicenseCheckResult>(),
+    validate: () => window.nexpdv.license.validate<LicenseGuardState>(),
+    onStatus: window.nexpdv.license.onStatus
   },
   auth: {
     state: () => window.nexpdv.auth.state<AuthState>(),
@@ -320,6 +333,8 @@ export const desktopApi = {
     backupState: () => window.nexpdv.system.backupState<BackupState>(),
     backupExport: () => window.nexpdv.system.backupExport<BackupState & { filePath: string }>(),
     backupRestore: (filePath: string) => window.nexpdv.system.backupRestore<BackupState>(filePath),
+    openExternal: (url: string) => window.nexpdv.system.openExternal<{ ok: true }>(url),
+    copyText: (text: string) => window.nexpdv.system.copyText<{ ok: true }>(text),
     cloudApiStatus: () => window.nexpdv.system.cloudApiStatus<CloudApiStatus>(),
     cloudApiTest: (apiUrl?: string) => window.nexpdv.system.cloudApiTest<CloudApiStatus>({ apiUrl }),
     cloudApiSave: (input: { apiUrl: string; login?: string; password?: string; pin?: string }) => window.nexpdv.system.cloudApiSave<CloudApiStatus>(input),

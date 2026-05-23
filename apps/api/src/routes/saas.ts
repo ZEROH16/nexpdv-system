@@ -25,6 +25,7 @@ const parseFeatures = (value?: string | null): FeatureMap => {
 };
 const featureString = (features: Partial<FeatureMap>) => JSON.stringify({ ...emptyFeatures(), ...features });
 const licenseKey = (planCode: string) => `NEXPDV-${planCode}-${randomBytes(3).toString("hex").toUpperCase()}`;
+const maskLicenseKey = (key: string) => (key.length <= 8 ? "****" : `${key.slice(0, 4)}...${key.slice(-4)}`);
 const addDays = (date: Date, days: number) => new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
 const strongDeleteCompany = "EXCLUIR";
 const strongDeleteLicense = "EXCLUIR";
@@ -109,6 +110,13 @@ const companyInput = z.object({
 
 const featureInput = z.object({ pix: z.boolean(), fiscal: z.boolean(), cloud: z.boolean(), mobile: z.boolean(), intelligence: z.boolean() });
 
+const activationStatusInput = z.object({
+  licenseKey: z.string().min(1),
+  deviceId: z.string().optional(),
+  companyId: z.string().optional(),
+  tenantId: z.string().optional()
+});
+
 const planInput = z.object({
   code: z.string().min(2).transform((value) => value.toUpperCase()),
   name: z.string().min(2),
@@ -151,6 +159,128 @@ const activationInput = z.object({
 });
 
 export const saasRoutes = async (app: FastifyInstance) => {
+  const resolveActivationStatus = async (input: z.infer<typeof activationStatusInput>) => {
+    const now = new Date();
+    const serverTime = now.toISOString();
+    const key = input.licenseKey.trim().toUpperCase();
+    const license = await app.prisma.license.findUnique({
+      where: { key },
+      include: { company: true, plan: true, devices: true }
+    });
+
+    if (!license) {
+      return {
+        statusCode: 404,
+        body: {
+          valid: false,
+          code: "LICENSE_NOT_FOUND",
+          status: "missing",
+          serverTime,
+          message: "Licenca nao encontrada. Entre em contato com o suporte NexPDV."
+        }
+      };
+    }
+
+    if (input.companyId && input.companyId !== license.companyId) {
+      return {
+        statusCode: 403,
+        body: {
+          valid: false,
+          code: "COMPANY_MISMATCH",
+          status: "invalid",
+          serverTime,
+          message: "Licenca nao pertence a este computador/empresa."
+        }
+      };
+    }
+
+    if (input.tenantId && input.tenantId !== license.company.tenantId) {
+      return {
+        statusCode: 403,
+        body: {
+          valid: false,
+          code: "TENANT_MISMATCH",
+          status: "invalid",
+          serverTime,
+          message: "Licenca nao pertence a este ambiente."
+        }
+      };
+    }
+
+    const device = input.deviceId ? license.devices.find((item) => item.deviceId === input.deviceId) : undefined;
+    if (input.deviceId && (!device || device.status !== "active")) {
+      return {
+        statusCode: 403,
+        body: {
+          valid: false,
+          code: "DEVICE_NOT_AUTHORIZED",
+          status: "device_unauthorized",
+          serverTime,
+          message: "Dispositivo nao autorizado para esta licenca."
+        }
+      };
+    }
+
+    const expired = license.validUntil.getTime() <= now.getTime();
+    const status = expired ? "expired" : license.status;
+    const valid = status === "active";
+    if (valid) {
+      await app.prisma.license.update({
+        where: { id: license.id },
+        data: { lastValidatedAt: now, offlineGraceUntil: addDays(now, config.LICENSE_OFFLINE_GRACE_DAYS) }
+      });
+      if (device) await app.prisma.device.update({ where: { id: device.id }, data: { online: true, lastSeenAt: now } });
+    }
+
+    const message = valid
+      ? "Licenca ativa."
+      : status === "blocked"
+        ? "Licenca bloqueada. Entre em contato com o suporte NexPDV."
+        : status === "expired"
+          ? "Licenca expirada. Entre em contato com o suporte NexPDV."
+          : "Licenca invalida. Entre em contato com o suporte NexPDV.";
+
+    return {
+      statusCode: valid ? 200 : status === "blocked" ? 423 : 403,
+      body: {
+        valid,
+        code: valid ? "LICENSE_ACTIVE" : status === "blocked" ? "LICENSE_BLOCKED" : status === "expired" ? "LICENSE_EXPIRED" : "LICENSE_INVALID",
+        status,
+        serverTime,
+        message,
+        company: {
+          id: license.company.id,
+          name: license.company.tradeName ?? license.company.name,
+          document: license.company.document,
+          ownerEmail: license.company.email
+        },
+        license: {
+          id: license.id,
+          key: license.key,
+          plan: license.planCode,
+          planLabel: license.plan?.name ?? license.planCode,
+          status,
+          validUntil: license.validUntil.toISOString(),
+          offlineGraceUntil: valid ? addDays(now, config.LICENSE_OFFLINE_GRACE_DAYS).toISOString() : license.offlineGraceUntil?.toISOString(),
+          demoMode: license.demoMode,
+          maxDevices: license.maxDevices,
+          features: parseFeatures(license.featuresJson),
+          activatedAt: license.activatedAt?.toISOString(),
+          lastValidatedAt: valid ? serverTime : license.lastValidatedAt?.toISOString(),
+          validationMode: "online"
+        },
+        device: device
+          ? {
+              id: device.id,
+              deviceId: device.deviceId,
+              status: device.status,
+              lastSeenAt: valid ? serverTime : device.lastSeenAt?.toISOString()
+            }
+          : undefined
+      }
+    };
+  };
+
   app.get("/updates/latest", async (request) => {
     const query = z
       .object({
@@ -284,7 +414,7 @@ export const saasRoutes = async (app: FastifyInstance) => {
       },
       include: { plan: true, company: true }
     });
-    await audit(app, { tenantId: license.company.tenantId, action: "licenca ativada online", entity: "device", entityId: device.id, details: key, request });
+    await audit(app, { tenantId: license.company.tenantId, action: "licenca ativada online", entity: "device", entityId: device.id, details: maskLicenseKey(key), request });
 
     return {
       ok: true,
@@ -319,15 +449,21 @@ export const saasRoutes = async (app: FastifyInstance) => {
     };
   });
 
+  const handleActivationStatus = async (request: FastifyRequest, reply: any) => {
+    const input = activationStatusInput.parse(request.query);
+    const result = await resolveActivationStatus(input);
+    reply.code(result.statusCode);
+    return result.body;
+  };
+
+  app.get("/activation/status", handleActivationStatus);
+  app.get("/licenses/status", handleActivationStatus);
+
   app.post("/activation/validate", async (request, reply) => {
-    const input = z.object({ licenseKey: z.string(), deviceId: z.string() }).parse(request.body);
-    const license = await app.prisma.license.findUnique({ where: { key: input.licenseKey.toUpperCase() }, include: { company: true, devices: true } });
-    if (!license) return reply.code(404).send({ message: "Licenca nao encontrada." });
-    const device = license.devices.find((item) => item.deviceId === input.deviceId && item.status === "active");
-    if (!device) return reply.code(403).send({ message: "Dispositivo nao autorizado." });
-    await app.prisma.device.update({ where: { id: device.id }, data: { online: true, lastSeenAt: new Date() } });
-    await app.prisma.license.update({ where: { id: license.id }, data: { lastValidatedAt: new Date(), offlineGraceUntil: addDays(new Date(), config.LICENSE_OFFLINE_GRACE_DAYS) } });
-    return { valid: license.status === "active" && license.validUntil.getTime() > Date.now(), status: license.status, features: parseFeatures(license.featuresJson) };
+    const input = activationStatusInput.pick({ licenseKey: true, deviceId: true }).parse(request.body);
+    const result = await resolveActivationStatus(input);
+    reply.code(result.statusCode);
+    return result.body;
   });
 
   app.post("/devices/heartbeat", async (request, reply) => {
@@ -658,7 +794,7 @@ export const saasRoutes = async (app: FastifyInstance) => {
         },
         include: { company: true, plan: true }
       });
-      await audit(app, { userId: (request.user as any).sub, action: "licenca gerada", entity: "license", entityId: license.id, details: license.key, request });
+      await audit(app, { userId: (request.user as any).sub, action: "licenca gerada", entity: "license", entityId: license.id, details: maskLicenseKey(license.key), request });
       return license;
     });
 
@@ -726,7 +862,7 @@ export const saasRoutes = async (app: FastifyInstance) => {
         app.prisma.device.updateMany({ where: { licenseId: params.id }, data: { licenseId: null, status: "inactive", online: false, deactivatedAt: new Date() } }),
         app.prisma.license.delete({ where: { id: params.id } })
       ]);
-      await audit(app, { userId: (request.user as any).sub, action: "licenca excluida", entity: "license", entityId: params.id, details: license.key, request });
+      await audit(app, { userId: (request.user as any).sub, action: "licenca excluida", entity: "license", entityId: params.id, details: maskLicenseKey(license.key), request });
       return { ok: true, detachedDevices: license.devices.length };
     });
 
