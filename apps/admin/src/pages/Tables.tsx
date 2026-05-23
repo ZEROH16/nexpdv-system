@@ -291,7 +291,7 @@ export const Licenses = () => {
           ]} />]
         ]} />
       </DataState>
-      {creating ? <Modal title="Gerar licenca" size="sm" onClose={() => setCreating(false)}><Form fields={licenseCreateFields(companies.data ?? [], plans.data ?? [])} value={{ companyId: "", planCode: "PRO", validUntil: "2027-12-31" }} onSubmit={generate} /></Modal> : null}
+      {creating ? <Modal title="Gerar licenca" size="sm" onClose={() => setCreating(false)}><Form fields={licenseCreateFields(companies.data ?? [], plans.data ?? [])} value={{ companyId: "", planId: plans.data?.[0]?.id ?? "", validUntil: "2027-12-31" }} onSubmit={generate} /></Modal> : null}
       {editing ? <Modal title="Editar licenca" onClose={() => setEditing(undefined)}><LicenseForm value={editing} onSubmit={save} /></Modal> : null}
     </Page>
   );
@@ -817,7 +817,7 @@ const userFields: Field[] = [
 const deviceFields: Field[] = [{ key: "name", label: "Nome amigavel" }, { key: "shortCode", label: "Identificador curto" }, { key: "status", label: "Status", type: "select", options: deviceStatusOptions }];
 const licenseCreateFields = (companies: any[], plans: any[]): Field[] => [
   { key: "companyId", label: "Empresa", type: "select", options: [{ value: "", label: "Selecione" }, ...companies.map((item) => ({ value: item.id, label: item.tradeName ?? item.name }))] },
-  { key: "planCode", label: "Plano", type: "select", options: plans.map((item) => ({ value: item.code, label: item.name })) },
+  { key: "planId", label: "Plano", type: "select", options: [{ value: "", label: "Selecione" }, ...plans.map((item) => ({ value: item.id, label: item.code ? `${item.name} (${item.code})` : item.name }))] },
   { key: "validUntil", label: "Validade", type: "date" }
 ];
 

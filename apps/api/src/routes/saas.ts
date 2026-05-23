@@ -623,28 +623,43 @@ export const saasRoutes = async (app: FastifyInstance) => {
     app.prisma.license.findMany({ include: { company: true, plan: true, devices: true }, orderBy: { updatedAt: "desc" }, take: 200 })
   );
 
-    adminApp.post("/licenses/generate", async (request) => {
-    const input = z.object({ companyId: z.string(), planCode: z.string(), validUntil: z.string().optional() }).parse(request.body);
-    const plan = await app.prisma.plan.findUniqueOrThrow({ where: { code: input.planCode.toUpperCase() } });
-    const validUntil = input.validUntil ? new Date(input.validUntil) : addDays(new Date(), 365);
-    const license = await app.prisma.license.create({
-      data: {
-        companyId: input.companyId,
-        planId: plan.id,
-        key: licenseKey(plan.code),
-        planCode: plan.code,
-        status: "active",
-        validUntil,
-        offlineGraceUntil: addDays(validUntil, plan.graceDays ?? config.LICENSE_OFFLINE_GRACE_DAYS),
-        demoMode: false,
-        featuresJson: plan.featuresJson,
-        maxDevices: plan.maxDevices
-      },
-      include: { company: true, plan: true }
+    adminApp.post("/licenses/generate", async (request, reply) => {
+      const input = z.object({ companyId: z.string().min(1), planId: z.string().min(1), validUntil: z.string().optional() }).parse(request.body);
+      const [company, plan] = await Promise.all([
+        app.prisma.company.findUnique({ where: { id: input.companyId }, select: { id: true } }),
+        app.prisma.plan.findUnique({ where: { id: input.planId } })
+      ]);
+      if (!company) {
+        return reply.code(404).send({ code: "COMPANY_NOT_FOUND", message: "Empresa selecionada nao foi encontrada." });
+      }
+      if (!plan) {
+        return reply.code(404).send({ code: "PLAN_NOT_FOUND", message: "Plano selecionado nao foi encontrado. Atualize a lista de planos e tente novamente.", details: `planId=${input.planId}` });
+      }
+      if (!plan.active) {
+        return reply.code(409).send({ code: "PLAN_INACTIVE", message: "Plano selecionado esta inativo. Ative o plano ou escolha outro antes de gerar a licenca." });
+      }
+      const validUntil = input.validUntil ? new Date(input.validUntil) : addDays(new Date(), 365);
+      if (Number.isNaN(validUntil.getTime())) {
+        return reply.code(400).send({ code: "INVALID_VALID_UNTIL", message: "Data de validade invalida. Use o formato AAAA-MM-DD." });
+      }
+      const license = await app.prisma.license.create({
+        data: {
+          companyId: input.companyId,
+          planId: plan.id,
+          key: licenseKey(plan.code),
+          planCode: plan.code,
+          status: "active",
+          validUntil,
+          offlineGraceUntil: addDays(validUntil, plan.graceDays ?? config.LICENSE_OFFLINE_GRACE_DAYS),
+          demoMode: false,
+          featuresJson: plan.featuresJson,
+          maxDevices: plan.maxDevices
+        },
+        include: { company: true, plan: true }
+      });
+      await audit(app, { userId: (request.user as any).sub, action: "licenca gerada", entity: "license", entityId: license.id, details: license.key, request });
+      return license;
     });
-    await audit(app, { userId: (request.user as any).sub, action: "licenca gerada", entity: "license", entityId: license.id, details: license.key, request });
-    return license;
-  });
 
     adminApp.patch("/licenses/:id", async (request) => {
       const params = z.object({ id: z.string() }).parse(request.params);
