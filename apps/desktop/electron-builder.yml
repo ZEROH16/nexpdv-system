@@ -21,5 +21,7 @@ nsis:
   runAfterFinish: true
   include: build/installer.nsh
 publish:
-  provider: generic
-  url: https://updates.nexpdv.com.br/desktop/stable
+  provider: github
+  owner: ZEROH16
+  repo: nexpdv-system
+  releaseType: release

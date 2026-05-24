@@ -128,11 +128,12 @@ Variaveis principais:
 
 ```bash
 AUTO_UPDATE_ENABLED=false
-UPDATE_PROVIDER_URL=""
 UPDATE_CHANNEL="stable"
+GH_OWNER="ZEROH16"
+GH_REPO="nexpdv-system"
 ```
 
-A API expoe `/updates/latest` para distribuir metadados futuros de versao, changelog, canal e URL de download.
+O Desktop usa GitHub Releases (`ZEROH16/nexpdv-system`) como provider do `electron-updater`.
 
 ## Fluxo Offline-First
 

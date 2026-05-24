@@ -51,9 +51,11 @@ export interface SyncState {
 export interface UpdateState {
   enabled: boolean;
   channel: "stable" | "beta" | "dev";
-  providerUrl?: string;
+  provider: "github";
+  owner: string;
+  repo: string;
   currentVersion: string;
-  status: "disabled" | "idle" | "checking" | "available" | "not_available" | "downloading" | "downloaded" | "error";
+  status: "disabled" | "idle" | "checking" | "available" | "not_available" | "downloading" | "downloaded" | "installing" | "error";
   version?: string;
   releaseDate?: string;
   releaseNotes?: string;

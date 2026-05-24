@@ -164,10 +164,11 @@ Variaveis preparadas:
 ```env
 AUTO_UPDATE_ENABLED=false
 UPDATE_CHANNEL=stable
-UPDATE_PROVIDER_URL=
+GH_OWNER=ZEROH16
+GH_REPO=nexpdv-system
 ```
 
-Em desenvolvimento o update fica desabilitado por padrao. Em producao, se ainda nao houver servidor de update, o app apenas registra log e nao mostra erro ao cliente.
+Em desenvolvimento o update fica desabilitado por padrao. Em producao, o app consulta GitHub Releases e mostra uma mensagem amigavel se estiver sem internet.
 
 ## 9. Checklist Go-Live
 

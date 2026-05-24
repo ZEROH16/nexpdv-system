@@ -4,7 +4,7 @@ import { desktopApi, type UpdateState } from "@/services/desktopApi";
 import { Button } from "./Button";
 
 const shouldShow = (state?: UpdateState): boolean =>
-  Boolean(state?.enabled && ["checking", "available", "downloading", "downloaded", "error"].includes(state.status));
+  Boolean(state?.enabled && ["checking", "available", "downloading", "downloaded", "installing", "error"].includes(state.status));
 
 export const UpdateModal = () => {
   const [state, setState] = useState<UpdateState>();
@@ -32,6 +32,8 @@ export const UpdateModal = () => {
         ? "Baixando atualizacao"
         : state?.status === "downloaded"
           ? "Atualizacao pronta"
+          : state?.status === "installing"
+            ? "Instalando atualizacao"
           : state?.status === "error"
             ? "Falha na atualizacao"
             : "Atualizacao disponivel";
@@ -63,7 +65,7 @@ export const UpdateModal = () => {
           {state?.status === "downloaded" ? (
             <Button onClick={() => void desktopApi.updates.install()}>Atualizar agora</Button>
           ) : null}
-          {state?.status !== "checking" && state?.status !== "downloading" ? (
+          {state?.status !== "checking" && state?.status !== "downloading" && state?.status !== "downloaded" && state?.status !== "installing" ? (
             <Button variant="secondary" onClick={() => void desktopApi.updates.remindLater().then(setState)}>
               Lembrar depois
             </Button>
